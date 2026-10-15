@@ -10,7 +10,7 @@ export function createOpenAITranscriber(opts: Opts): Transcriber {
   return {
     async transcribe(audio, o) {
       const form = new FormData()
-      form.append('file', new Blob([audio.bytes], { type: audio.mime }), 'chunk.webm')
+      form.append('file', new Blob([new Uint8Array(audio.bytes)], { type: audio.mime }), 'chunk.webm')
       form.append('model', opts.model)
       if (o?.language) form.append('language', o.language)
 

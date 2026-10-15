@@ -18,7 +18,7 @@ describe('registry', () => {
     const complete = vi.fn(async () => {
       throw new ProviderError('rate_limit', 'slow')
     })
-    const sleep = vi.fn(async () => {})
+    const sleep = vi.fn(async (_ms: number) => {})
     const reg = createRegistry({ secrets: { get: () => 'k' }, build: () => fakeProvider(complete), sleep })
     reg.configure(config)
     await expect(reg.call({ messages: [] })).rejects.toMatchObject({ kind: 'rate_limit' })

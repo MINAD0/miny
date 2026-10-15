@@ -71,6 +71,12 @@ describe('notes repo', () => {
     expect(repo.list({ archived: false }).length).toBe(1)
   })
 
+  it('lists folders alphabetically', () => {
+    repo.createFolder('Zeta')
+    repo.createFolder('Alpha')
+    expect(repo.listFolders().map((f) => f.name)).toEqual(['Alpha', 'Zeta'])
+  })
+
   it('replaces tags and ignores blank or duplicate names', () => {
     const n = repo.create({ title: 'T' })
     repo.setTags(n.id, ['a', ' a ', '', 'b'])

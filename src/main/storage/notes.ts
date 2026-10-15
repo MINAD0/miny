@@ -126,6 +126,10 @@ export function createNotesRepo(db: Database.Database) {
     createFolder(name: string, parentId: number | null = null): Folder {
       const info = db.prepare('INSERT INTO folders (name, parent_id) VALUES (?, ?)').run(name, parentId)
       return db.prepare('SELECT * FROM folders WHERE id = ?').get(Number(info.lastInsertRowid)) as Folder
+    },
+
+    listFolders(): Folder[] {
+      return db.prepare('SELECT * FROM folders ORDER BY name').all() as Folder[]
     }
   }
 }
