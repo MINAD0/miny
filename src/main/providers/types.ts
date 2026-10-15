@@ -1,0 +1,43 @@
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mime: 'image/png' | 'image/jpeg'; base64: string }
+
+export type ChatMessage = {
+  role: 'system' | 'user' | 'assistant'
+  content: string | ContentPart[]
+}
+
+export type ChatRequest = {
+  model: string
+  messages: ChatMessage[]
+  maxTokens?: number
+  signal?: AbortSignal
+}
+
+export interface LLMProvider {
+  id: string
+  complete(req: ChatRequest): Promise<string>
+  stream(req: ChatRequest): AsyncIterable<string>
+}
+
+export type ProviderErrorKind = 'auth' | 'rate_limit' | 'timeout' | 'unsupported' | 'other'
+
+export class ProviderError extends Error {
+  constructor(
+    public kind: ProviderErrorKind,
+    message: string,
+    public status?: number
+  ) {
+    super(message)
+    this.name = 'ProviderError'
+  }
+}
+
+export function errorFromStatus(status: number, body: string): ProviderError {
+  if (status === 401 || status === 403) return new ProviderError('auth', `Authentication failed (${status})`, status)
+  if (status === 429) return new ProviderError('rate_limit', 'Rate limit reached', status)
+  if (status === 400 && /image|vision|multimodal/i.test(body)) {
+    return new ProviderError('unsupported', 'This model does not accept images', status)
+  }
+  return new ProviderError('other', `Provider error ${status}: ${body.slice(0, 200)}`, status)
+}
