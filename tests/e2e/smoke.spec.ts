@@ -32,9 +32,9 @@ test.afterEach(async () => {
 test('switching provider loads that provider default model', async () => {
   await page.getByRole('button', { name: 'settings', exact: true }).click()
   await page.getByLabel('Provider', { exact: true }).selectOption('anthropic')
-  await expect(page.getByLabel('Model')).toHaveValue('claude-haiku-5-5')
+  await expect(page.getByLabel('Model', { exact: true })).toHaveValue('claude-haiku-5-5')
   await page.getByLabel('Provider', { exact: true }).selectOption('ollama')
-  await expect(page.getByLabel('Model')).toHaveValue('llama3')
+  await expect(page.getByLabel('Model', { exact: true })).toHaveValue('llama3')
 })
 
 test('one Save stores an OpenRouter key and makes OpenRouter the provider in use', async () => {
@@ -73,6 +73,7 @@ test('the transcription key saves without changing the provider in use', async (
   await page.getByLabel(/Block all outbound/).check()
   await page.getByLabel('Provider', { exact: true }).selectOption('ollama')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.getByRole('radio', { name: /^OpenAI/ }).check()
   await page.getByLabel('OpenAI key for transcription').fill('sk-test')
   await page.getByRole('button', { name: 'Save transcription key' }).click()
   await expect(page.getByText('OpenAI key saved for transcription.')).toBeVisible()

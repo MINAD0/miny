@@ -1,19 +1,93 @@
 import { useEffect, useState } from 'react'
 import { PROVIDERS, findProvider } from '../../shared/providers'
 import { cleanIpcError } from './ipcError'
+import { LANGUAGES, LOCAL_MODELS } from '../../shared/transcription'
 
 type ModelInfo = { id: string; name: string; free: boolean; vision: boolean; contextTokens: number }
 
-// Listening always transcribes with OpenAI, whatever provider answers questions.
-// This saves the OpenAI key without changing the active provider.
-function TranscriptionKey() {
+type Stt = Awaited<ReturnType<typeof window.miny.stt.get>>
+
+// How Listen turns speech into text. Local Whisper is the default: no key, audio stays on this computer.
+// OpenAI is optional; its key is saved here without changing the provider that answers questions.
+function TranscriptionSettings() {
+  const [stt, setStt] = useState<Stt | null>(null)
   const [key, setKey] = useState('')
   const [hasKey, setHasKey] = useState(false)
   const [status, setStatus] = useState('')
 
   useEffect(() => {
+    void window.miny.stt.get().then(setStt)
     void window.miny.keys.has('openai').then(setHasKey)
   }, [])
+
+  const update = async (patch: Partial<Stt>) => {
+    if (!stt) return
+    const saved = await window.miny.stt.set({ ...stt, ...patch })
+    setStt(saved)
+    setStatus('Transcription settings saved.')
+  }
+
+  if (!stt) return null
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <h2>Transcription (Listen)</h2>
+      <label style={{ display: 'block' }}>
+        <input type="radio" name="stt" checked={stt.provider === 'local'} onChange={() => update({ provider: 'local' })} /> Local
+        Whisper (default): free, works offline, audio stays on this computer
+      </label>
+      <label style={{ display: 'block' }}>
+        <input type="radio" name="stt" checked={stt.provider === 'openai'} onChange={() => update({ provider: 'openai' })} /> OpenAI:
+        more accurate, needs an OpenAI key, sends audio to OpenAI
+      </label>
+
+      {stt.provider === 'local' ? (
+        <div style={{ marginTop: 8 }}>
+          <label>
+            Whisper model{' '}
+            <select aria-label="Whisper model" value={stt.localModel} onChange={(e) => update({ localModel: e.target.value as Stt['localModel'] })}>
+              {LOCAL_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>{' '}
+          <label>
+            Language{' '}
+            <select
+              aria-label="Language"
+              value={stt.language}
+              onChange={(e) => update({ language: e.target.value })}
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p style={{ fontSize: 13, opacity: 0.75 }}>
+            Set the language people will speak: Whisper here doesn't detect it reliably. The model downloads once, the
+            first time you start listening, then works offline.
+          </p>
+        </div>
+      ) : (
+        <OpenAiTranscriptionKey hasKey={hasKey} setHasKey={setHasKey} keyValue={key} setKey={setKey} setStatus={setStatus} />
+      )}
+      <p role="status">{status}</p>
+    </div>
+  )
+}
+
+function OpenAiTranscriptionKey(props: {
+  hasKey: boolean
+  setHasKey(v: boolean): void
+  keyValue: string
+  setKey(v: string): void
+  setStatus(v: string): void
+}) {
+  const { hasKey, setHasKey, keyValue: key, setKey, setStatus } = props
 
   const save = async () => {
     if (!key.trim()) {
@@ -31,11 +105,7 @@ function TranscriptionKey() {
   }
 
   return (
-    <div style={{ marginTop: 24 }}>
-      <h2>Transcription (Listen)</h2>
-      <p style={{ fontSize: 13, opacity: 0.75 }}>
-        Listening turns speech into text with OpenAI, so it needs an OpenAI key even if answers come from another provider.
-      </p>
+    <div style={{ marginTop: 8 }}>
       <input
         type="password"
         aria-label="OpenAI key for transcription"
@@ -45,7 +115,6 @@ function TranscriptionKey() {
         style={{ width: '100%' }}
       />
       <button onClick={save}>Save transcription key</button>
-      <p role="status">{status}</p>
     </div>
   )
 }
@@ -196,7 +265,7 @@ export function SettingsView() {
       </div>
       <p role="status">{status}</p>
 
-      <TranscriptionKey />
+      <TranscriptionSettings />
 
 
       <h2 style={{ marginTop: 24 }}>Network kill switch</h2>

@@ -2,7 +2,7 @@ import { BrowserWindow, globalShortcut, screen } from 'electron'
 
 // The overlay is visible to the user and to screen captures. Do not enable
 // Electron's content-protection API here: tests/main/overlay.test.ts pins that.
-export function createOverlay(opts: { hotkey: string; preloadPath: string; htmlPath: string }) {
+export function createOverlay(opts: { hotkey: string; preloadPath: string; load(win: BrowserWindow): void }) {
   const { width } = screen.getPrimaryDisplay().workAreaSize
 
   const win = new BrowserWindow({
@@ -19,7 +19,7 @@ export function createOverlay(opts: { hotkey: string; preloadPath: string; htmlP
     webPreferences: { preload: opts.preloadPath, contextIsolation: true, sandbox: true }
   })
   win.setAlwaysOnTop(true, 'screen-saver')
-  win.loadFile(opts.htmlPath)
+  opts.load(win)
 
   // Local hotkey shows and hides the overlay on the user's own screen.
   globalShortcut.register(opts.hotkey, () => {

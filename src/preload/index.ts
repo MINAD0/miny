@@ -39,8 +39,19 @@ const api = {
     set: (providerId: string, key: string) => ipcRenderer.invoke('keys:set', providerId, key),
     has: (providerId: string) => ipcRenderer.invoke('keys:has', providerId)
   },
+  stt: {
+    get: (): Promise<{ provider: 'local' | 'openai'; localModel: 'tiny' | 'base' | 'small'; language: string }> =>
+      ipcRenderer.invoke('stt:get'),
+    set: (value: unknown) => ipcRenderer.invoke('stt:set', value)
+  },
   listen: {
-    start: () => ipcRenderer.invoke('listen:start'),
+    start: (): Promise<{
+      provider: 'local' | 'openai'
+      localModel: 'tiny' | 'base' | 'small'
+      language: string
+      killSwitch: boolean
+    }> => ipcRenderer.invoke('listen:start'),
+    text: (text: string, startMs: number, endMs: number) => ipcRenderer.invoke('listen:text', text, startMs, endMs),
     stop: () => ipcRenderer.invoke('listen:stop'),
     chunk: (bytes: Uint8Array, mime: string, startMs: number, endMs: number) =>
       ipcRenderer.invoke('listen:chunk', bytes, mime, startMs, endMs),

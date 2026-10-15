@@ -43,6 +43,15 @@ export function createListenLoop(deps: Deps) {
       s.pending.add(p)
       return p.finally(() => s.pending.delete(p))
     },
+    // Text already transcribed elsewhere (local Whisper in the window) joins the session directly.
+    pushText(text: string, startMs: number, endMs: number): void {
+      const s = current
+      const t = text.trim()
+      if (!s || !t) return
+      const seg = { t_start: startMs, t_end: endMs, text: t }
+      s.segments.push(seg)
+      deps.onSegment(seg)
+    },
     // Waits for chunks still being transcribed, so the end of the session is not lost.
     // Returns null when there was no running session or nothing was said.
     async stop(_reason: 'user' | 'device_lost'): Promise<{ sessionId: number | null }> {

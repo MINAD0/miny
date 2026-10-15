@@ -120,6 +120,27 @@ describe('listen loop', () => {
     expect(saveSession).not.toHaveBeenCalled()
   })
 
+  it('accepts text transcribed locally and saves it with the session', async () => {
+    const onSegment = vi.fn((_seg: any) => {})
+    const saveSession = vi.fn((_segs: any[]) => 3)
+    const transcribe = vi.fn()
+    const loop = createListenLoop({ transcriber: { transcribe }, onSegment, onError: vi.fn(), saveSession })
+    loop.start()
+    loop.pushText(' What is a closure? ', 0, 5000)
+    loop.pushText('   ', 5000, 10000) // blank text is ignored
+    await loop.stop('user')
+    expect(onSegment.mock.calls.map((c) => c[0].text)).toEqual(['What is a closure?'])
+    expect(saveSession.mock.calls[0][0].map((s: any) => s.text)).toEqual(['What is a closure?'])
+    expect(transcribe).not.toHaveBeenCalled()
+  })
+
+  it('ignores local text when no session is running', () => {
+    const onSegment = vi.fn((_seg: any) => {})
+    const loop = createListenLoop({ transcriber: { transcribe: vi.fn() }, onSegment, onError: vi.fn(), saveSession: () => 1 })
+    loop.pushText('stray', 0, 1)
+    expect(onSegment).not.toHaveBeenCalled()
+  })
+
   it('ignores chunks that arrive after stop', async () => {
     const transcribe = vi.fn(async () => ({ text: 'late' }))
     const loop = createListenLoop({ transcriber: { transcribe }, onSegment: vi.fn(), onError: vi.fn(), saveSession: () => 1 })

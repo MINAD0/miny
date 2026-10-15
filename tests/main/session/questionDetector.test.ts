@@ -29,6 +29,28 @@ describe('isQuestion', () => {
     expect(isQuestion('من الشركة جئت')).toBe(false)
   })
 
+  it('finds a question that follows a greeting in the same chunk', () => {
+    expect(isQuestion('Bonjour. Pouvez-vous expliquer votre dernier projet')).toBe(true)
+    expect(isQuestion('Hello everyone. What is a closure in JavaScript')).toBe(true)
+  })
+
+  it('detects French questions without a question mark (as Whisper often outputs them)', () => {
+    for (const q of [
+      "Qu'est-ce qu'une closure",
+      'Est-ce que vous avez déjà utilisé React',
+      'Avez-vous travaillé en équipe',
+      'Combien de temps a duré le projet',
+      'Parlez-moi de vous'
+    ]) {
+      expect(isQuestion(q)).toBe(true)
+    }
+  })
+
+  it('does not flag plain greetings or statements', () => {
+    expect(isQuestion('Bonjour. Merci de votre présence.')).toBe(false)
+    expect(isQuestion('Hello everyone. Thanks for joining.')).toBe(false)
+  })
+
   it('does not panic on text with only punctuation', () => {
     expect(() => isQuestion('???')).not.toThrow()
   })

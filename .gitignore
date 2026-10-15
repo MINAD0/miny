@@ -4,3 +4,5 @@ dist
 *.db
 test-results
 playwright-report
+src/renderer/public/ort
+tests/.profiles

@@ -24,6 +24,7 @@ import { buildVisionMessage, checkVision } from './capture/vision'
 import { findProvider } from '../shared/providers'
 import { fetchOpenRouterModels, ModelInfo } from './providers/modelList'
 import { learnCaps } from './providers/capabilities'
+import { toSttConfig } from '../shared/transcription'
 
 // Tests point the app at a throwaway profile so they never touch real notes.
 if (process.env.MINY_USER_DATA) {
@@ -249,25 +250,46 @@ function registerIpc() {
     }
   })
 
-  // Listen
+  // Transcription settings (local Whisper by default)
+  handle('stt:get', () => toSttConfig(readSetting('stt', null), app.getLocale()))
+  handle('stt:set', (_, value) => {
+    const cfg = toSttConfig(value, app.getLocale())
+    writeSetting('stt', cfg)
+    return cfg
+  })
+
+  // Listen. Returns the transcription config so the window knows whether to
+  // transcribe locally (send text) or send audio chunks for OpenAI.
   handle('listen:start', () => {
     if (listen.isActive()) throw new Error('Already listening')
-    const key = secrets.get('openai')
-    if (!key) throw new Error('Set your OpenAI key in Settings to use transcription')
+    const stt = toSttConfig(readSetting('stt', null), app.getLocale())
+    if (stt.provider === 'openai') {
+      const key = secrets.get('openai')
+      if (!key) throw new Error('OpenAI transcription needs an OpenAI key. Add it in Settings, or switch to local Whisper.')
+      transcriber = guardTranscriber(
+        createOpenAITranscriber({ apiKey: key, model: readSetting('stt.model', 'gpt-4o-transcribe') }),
+        () => registry.isKilled()
+      )
+    } else {
+      // Local Whisper runs in the window and sends text; no audio reaches this process.
+      transcriber = {
+        transcribe: () => Promise.reject(new Error('Local Whisper sends text, not audio'))
+      }
+    }
     transcript.length = 0
     sessionStartedAt = Date.now()
-    transcriber = guardTranscriber(
-      createOpenAITranscriber({ apiKey: key, model: readSetting('stt.model', 'gpt-4o-transcribe') }),
-      () => registry.isKilled()
-    )
     listen.start()
-    tracker.record('session_started', { mode: 'meeting' })
-    return true
+    tracker.record('session_started', { mode: 'meeting', transcription: stt.provider })
+    return { ...stt, killSwitch: registry.isKilled() }
   })
   handle('listen:stop', () => listen.stop('user'))
   handle('listen:chunk', (_, bytes: Uint8Array, mime: string, s: number, e: number) =>
     listen.pushChunk(new Uint8Array(bytes), mime, s, e)
   )
+  handle('listen:text', (_, text: string, s: number, e: number) => {
+    if (typeof text !== 'string' || text.length > 5000) return
+    listen.pushText(text, Number(s) || 0, Number(e) || 0)
+  })
 
   // Ask and Vision
   handle('ask:send', (_, question: string, useContext: boolean) => answer(question, useContext ? transcript : null, 'ask'))
@@ -311,6 +333,14 @@ function registerIpc() {
   })
 }
 
+// In `npm run dev`, electron-vite serves the renderer and sets ELECTRON_RENDERER_URL;
+// otherwise load the built files.
+function loadPage(win: BrowserWindow, page: 'main' | 'overlay') {
+  const devUrl = process.env.ELECTRON_RENDERER_URL
+  if (devUrl && !app.isPackaged) void win.loadURL(`${devUrl}/${page}/index.html`)
+  else void win.loadFile(join(__dirname, `../renderer/${page}/index.html`))
+}
+
 // Neither window may navigate away or open new windows.
 function lockDown(contents: WebContents) {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -330,12 +360,12 @@ app.whenReady().then(() => {
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true }
   })
   lockDown(mainWin.webContents)
-  mainWin.loadFile(join(__dirname, '../renderer/main/index.html'))
+  loadPage(mainWin, 'main')
 
   overlay = createOverlay({
     hotkey: readSetting('hotkey.overlay', 'Control+Shift+Space'),
     preloadPath: join(__dirname, '../preload/overlay.js'),
-    htmlPath: join(__dirname, '../renderer/overlay/index.html')
+    load: (win) => loadPage(win, 'overlay')
   })
   lockDown(overlay.window.webContents)
 

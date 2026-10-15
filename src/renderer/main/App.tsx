@@ -4,6 +4,7 @@ import { SettingsView } from './SettingsView'
 import { ActivityView } from './ActivityView'
 import { startCapture, CaptureHandle } from './capture/audioCapture'
 import { cleanIpcError } from './ipcError'
+import { loadWhisper, transcribeChunk } from './whisper/localWhisper'
 
 type Tab = 'listen' | 'notes' | 'settings' | 'activity'
 
@@ -84,6 +85,7 @@ function ListenView() {
   }
   const [segments, setSegments] = useState<Seg[]>([])
   const [error, setError] = useState('')
+  const [note, setNote] = useState('')
   const handle = useRef<CaptureHandle | null>(null)
 
   // Keep lines in time order; chunks can finish transcribing out of order.
@@ -121,24 +123,49 @@ function ListenView() {
     if (phaseRef.current !== 'idle') return
     setPhase('starting')
     setError('')
+    setNote('')
+    let cfg: Awaited<ReturnType<typeof window.miny.listen.start>>
     try {
-      await window.miny.listen.start()
+      cfg = await window.miny.listen.start()
     } catch (e) {
       setError(cleanIpcError(e))
       setPhase('idle')
       return
     }
     try {
+      if (cfg.provider === 'local') {
+        // Load (and, the first time, download) the Whisper model before recording.
+        setNote(`Loading the Whisper ${cfg.localModel} model…`)
+        const device = await loadWhisper(cfg.localModel, {
+          allowRemote: !cfg.killSwitch,
+          onProgress: (p) => p.total && setNote(`Downloading the Whisper model: ${Math.round((p.loaded / p.total) * 100)}%`)
+        })
+        setNote(
+          `Transcribing locally with Whisper ${cfg.localModel} on the ${device === 'webgpu' ? 'GPU' : 'CPU'}. Audio stays on this computer.`
+        )
+      }
+      const onChunk =
+        cfg.provider === 'local'
+          ? async (bytes: Uint8Array, _mime: string, s: number, e: number) => {
+              try {
+                const text = await transcribeChunk(bytes, cfg.language)
+                if (text) await window.miny.listen.text(text, s, e)
+              } catch (err) {
+                setError(`Local transcription failed: ${(err as Error).message}`)
+              }
+            }
+          : (bytes: Uint8Array, mime: string, s: number, e: number) => window.miny.listen.chunk(bytes, mime, s, e)
       handle.current = await startCapture({
-        onChunk: (bytes, mime, s, e) => window.miny.listen.chunk(bytes, mime, s, e),
+        onChunk,
         onDeviceLost: () => void stop('device_lost')
       })
       setSegments([])
       setPhase('live')
     } catch (e) {
-      // Capture failed (e.g. no permission): end the session the main process started.
+      // Model load or capture failed: end the session the main process started.
       await window.miny.listen.stop().catch(() => undefined)
-      setError(`Could not start audio capture: ${cleanIpcError(e)}`)
+      setNote('')
+      setError(cleanIpcError(e))
       setPhase('idle')
     }
   }
@@ -154,6 +181,7 @@ function ListenView() {
       >
         {label}
       </button>
+      {note && <p data-testid="listen-note">{note}</p>}
       {error && <p style={{ color: '#b00020' }}>{error}</p>}
       <AskBox />
       <div style={{ marginTop: 12, whiteSpace: 'pre-wrap' }}>
