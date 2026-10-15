@@ -10,7 +10,11 @@ let profile: string
 test.beforeEach(async () => {
   profile = mkdtempSync(join(tmpdir(), 'miny-e2e-'))
   app = await electron.launch({ args: ['.'], env: { ...process.env, MINY_USER_DATA: profile } })
-  page = await app.firstWindow()
+  // The main window and the overlay open in a race, so pick the main window by its title.
+  await app.firstWindow()
+  while (app.windows().length < 2) await app.waitForEvent('window')
+  const titles = await Promise.all(app.windows().map((w) => w.title()))
+  page = app.windows()[titles.indexOf('miny')]
 })
 
 // The overlay window is created after the main window, so wait for it.
@@ -31,6 +35,48 @@ test('switching provider loads that provider default model', async () => {
   await expect(page.getByLabel('Model')).toHaveValue('claude-haiku-5-5')
   await page.getByLabel('Provider', { exact: true }).selectOption('ollama')
   await expect(page.getByLabel('Model')).toHaveValue('llama3')
+})
+
+test('one Save stores an OpenRouter key and makes OpenRouter the provider in use', async () => {
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await page.getByLabel(/Block all outbound/).check() // no network in tests
+  await page.getByLabel('Provider', { exact: true }).selectOption('openrouter')
+  await page.getByLabel('API key', { exact: true }).fill('sk-or-v1-test')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByTestId('active-provider')).toContainText('OpenRouter')
+
+  // Leaving and coming back keeps OpenRouter selected and its key marked as saved.
+  await page.getByRole('button', { name: 'notes', exact: true }).click()
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await expect(page.getByLabel('Provider', { exact: true })).toHaveValue('openrouter')
+  await expect(page.getByLabel('API key', { exact: true })).toHaveAttribute('placeholder', /key saved/)
+
+  // Ask now goes to OpenRouter (blocked by the kill switch), not to OpenAI.
+  await page.getByRole('button', { name: 'listen', exact: true }).click()
+  await page.getByPlaceholder('Ask a question').fill('hello?')
+  await page.getByRole('button', { name: 'Ask', exact: true }).click()
+  const overlay = await overlayWindow()
+  await expect(overlay.getByText(/kill switch/i)).toBeVisible()
+  await expect(overlay.getByText(/for openai/i)).toHaveCount(0)
+})
+
+test('Save without a key asks for one instead of silently keeping the old provider', async () => {
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await page.getByLabel(/Block all outbound/).check()
+  await page.getByLabel('Provider', { exact: true }).selectOption('openrouter')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText(/Enter your OpenRouter .* API key first/)).toBeVisible()
+})
+
+test('the transcription key saves without changing the provider in use', async () => {
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await page.getByLabel(/Block all outbound/).check()
+  await page.getByLabel('Provider', { exact: true }).selectOption('ollama')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.getByLabel('OpenAI key for transcription').fill('sk-test')
+  await page.getByRole('button', { name: 'Save transcription key' }).click()
+  await expect(page.getByText('OpenAI key saved for transcription.')).toBeVisible()
+  await expect(page.getByTestId('active-provider')).toContainText('Ollama')
 })
 
 test('the overlay window cannot reach notes, settings, or keys', async () => {

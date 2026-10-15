@@ -7,8 +7,16 @@ const TABLE: Record<string, ModelCaps> = {
   'anthropic:claude-haiku-5-5': { vision: true, contextTokens: 200000 }
 }
 
+// Capabilities learned at runtime from a provider's model list (e.g. OpenRouter).
+const learned: Record<string, ModelCaps> = {}
+
 const DEFAULT: ModelCaps = { vision: false, contextTokens: 8000 }
 
+export function learnCaps(providerId: string, model: string, caps: ModelCaps): void {
+  learned[`${providerId}:${model}`] = caps
+}
+
 export function getCaps(providerId: string, model: string): ModelCaps {
-  return TABLE[`${providerId}:${model}`] ?? DEFAULT
+  const key = `${providerId}:${model}`
+  return learned[key] ?? TABLE[key] ?? DEFAULT
 }

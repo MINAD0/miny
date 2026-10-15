@@ -93,12 +93,15 @@ export function NotesView() {
   // Checkbox and folder changes are single clicks, so they save immediately.
   const saveMeta = async (patch: Partial<Pick<Note, 'favorite' | 'archived' | 'folder_id'>>) => {
     if (!selected) return
+    const before = selected
+    setSelected({ ...selected, ...patch }) // show the change at once; revert if the save fails
     try {
       const updated = await window.miny.notes.update(selected.id, patch)
-      setSelected(updated)
+      setSelected((s) => (s && s.id === updated.id ? updated : s))
       setError('')
       void refresh()
     } catch (e) {
+      setSelected((s) => (s && s.id === before.id ? before : s))
       setError((e as Error).message)
     }
   }

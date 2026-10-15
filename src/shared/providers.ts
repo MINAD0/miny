@@ -16,7 +16,8 @@ export const PROVIDERS: ProviderEntry[] = [
     label: 'OpenRouter (includes free models)',
     baseUrl: 'https://openrouter.ai/api/v1',
     needsKey: true,
-    defaultModel: 'meta-llama/llama-3.3-70b-instruct:free'
+    // Free models change often; Settings loads the live list. This one existed on 2026-10-15.
+    defaultModel: 'google/gemma-4-31b-it:free'
   },
   { id: 'ollama', label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1', needsKey: false, defaultModel: 'llama3' }
 ]

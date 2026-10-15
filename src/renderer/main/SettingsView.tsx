@@ -2,27 +2,98 @@ import { useEffect, useState } from 'react'
 import { PROVIDERS, findProvider } from '../../shared/providers'
 import { cleanIpcError } from './ipcError'
 
+type ModelInfo = { id: string; name: string; free: boolean; vision: boolean; contextTokens: number }
+
+// Listening always transcribes with OpenAI, whatever provider answers questions.
+// This saves the OpenAI key without changing the active provider.
+function TranscriptionKey() {
+  const [key, setKey] = useState('')
+  const [hasKey, setHasKey] = useState(false)
+  const [status, setStatus] = useState('')
+
+  useEffect(() => {
+    void window.miny.keys.has('openai').then(setHasKey)
+  }, [])
+
+  const save = async () => {
+    if (!key.trim()) {
+      setStatus('Enter an OpenAI key first.')
+      return
+    }
+    try {
+      await window.miny.keys.set('openai', key.trim())
+      setKey('')
+      setHasKey(true)
+      setStatus('OpenAI key saved for transcription.')
+    } catch (e) {
+      setStatus(cleanIpcError(e))
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <h2>Transcription (Listen)</h2>
+      <p style={{ fontSize: 13, opacity: 0.75 }}>
+        Listening turns speech into text with OpenAI, so it needs an OpenAI key even if answers come from another provider.
+      </p>
+      <input
+        type="password"
+        aria-label="OpenAI key for transcription"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        placeholder={hasKey ? 'OpenAI key saved. Enter a new one to replace it.' : 'OpenAI API key'}
+        style={{ width: '100%' }}
+      />
+      <button onClick={save}>Save transcription key</button>
+      <p role="status">{status}</p>
+    </div>
+  )
+}
+type Active = { providerId: string; model: string }
+
 export function SettingsView() {
-  const [providerId, setProviderId] = useState('openai')
+  const [active, setActive] = useState<Active | null>(null)
+  const [providerId, setProviderId] = useState(PROVIDERS[0].id)
   const [model, setModel] = useState(PROVIDERS[0].defaultModel)
   const [key, setKey] = useState('')
   const [hasKey, setHasKey] = useState(false)
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [freeOnly, setFreeOnly] = useState(true)
+  const [modelsNote, setModelsNote] = useState('')
   const [killed, setKilled] = useState(false)
   const [status, setStatus] = useState('')
 
   const p = findProvider(providerId) ?? PROVIDERS[0]
 
+  const loadModels = async (id: string) => {
+    setModels([])
+    setModelsNote('')
+    if (id !== 'openrouter') return
+    setModelsNote('Loading the model list…')
+    try {
+      const list = await window.miny.models.list(id)
+      setModels(list)
+      setModelsNote(`${list.length} models available, ${list.filter((m) => m.free).length} free.`)
+    } catch (e) {
+      setModelsNote(`Could not load the model list: ${cleanIpcError(e)}`)
+    }
+  }
+
+  // Show the saved (active) provider when the page opens.
   useEffect(() => {
     void window.miny.settings.get('llm.provider').then((v: any) => {
       if (v && findProvider(v.providerId)) {
+        setActive({ providerId: v.providerId, model: v.model })
         setProviderId(v.providerId)
         setModel(v.model)
+        void loadModels(v.providerId)
       }
     })
     void window.miny.settings.get('killswitch').then((v: any) => setKilled(!!v))
   }, [])
 
   useEffect(() => {
+    setKey('')
     void window.miny.keys.has(providerId).then(setHasKey)
   }, [providerId])
 
@@ -31,34 +102,42 @@ export function SettingsView() {
     setProviderId(id)
     setModel(findProvider(id)?.defaultModel ?? '')
     setStatus('')
+    void loadModels(id)
   }
 
-  const saveProvider = async () => {
-    try {
-      await window.miny.settings.set('llm.provider', { providerId: p.id, model })
-      setStatus('Provider saved')
-    } catch (e) {
-      setStatus(cleanIpcError(e))
+  // One Save: stores the key (if typed) and makes this provider and model the active one.
+  const save = async () => {
+    const typedKey = key.trim()
+    if (p.needsKey && !typedKey && !hasKey) {
+      setStatus(`Enter your ${p.label} API key first.`)
+      return
     }
-  }
-
-  const saveKey = async () => {
-    if (!key.trim()) {
-      setStatus('Enter a key first')
+    if (models.length && !models.some((m) => m.id === model.trim())) {
+      setStatus(`"${model.trim()}" is not in the ${p.label} model list. Pick one from the list.`)
       return
     }
     try {
-      await window.miny.keys.set(p.id, key.trim())
+      if (typedKey) await window.miny.keys.set(p.id, typedKey)
+      await window.miny.settings.set('llm.provider', { providerId: p.id, model })
       setKey('')
-      setHasKey(true)
-      setStatus('Key saved, encrypted by Windows')
+      setHasKey(p.needsKey ? true : hasKey)
+      setActive({ providerId: p.id, model: model.trim() })
+      setStatus(`Saved. miny now uses ${p.label} with ${model.trim()}.`)
     } catch (e) {
       setStatus(cleanIpcError(e))
     }
   }
 
+  const shown = freeOnly ? models.filter((m) => m.free) : models
+  const selected = models.find((m) => m.id === model.trim())
+  const activeLabel = active ? `${findProvider(active.providerId)?.label ?? active.providerId} · ${active.model}` : 'OpenAI · gpt-4o-mini (default)'
+
   return (
-    <div style={{ maxWidth: 520 }}>
+    <div style={{ maxWidth: 560 }}>
+      <p data-testid="active-provider">
+        <strong>In use:</strong> {activeLabel}
+      </p>
+
       <h2>Provider</h2>
       <select aria-label="Provider" value={providerId} onChange={(e) => changeProvider(e.target.value)}>
         {PROVIDERS.map((x) => (
@@ -67,27 +146,58 @@ export function SettingsView() {
           </option>
         ))}
       </select>
+
       <div style={{ marginTop: 8 }}>
-        <input aria-label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model name" style={{ width: '100%' }} />
+        <input
+          aria-label="Model"
+          list="model-options"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder="Model name"
+          style={{ width: '100%' }}
+        />
+        <datalist id="model-options">
+          {shown.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+              {m.vision ? ' (images)' : ''}
+            </option>
+          ))}
+        </datalist>
+        {models.length > 0 && (
+          <label style={{ fontSize: 13 }}>
+            <input type="checkbox" checked={freeOnly} onChange={(e) => setFreeOnly(e.target.checked)} /> Show free models only
+          </label>
+        )}
+        {modelsNote && <div style={{ fontSize: 13, opacity: 0.75 }}>{modelsNote}</div>}
+        {selected && (
+          <div style={{ fontSize: 13, opacity: 0.75 }}>
+            {selected.free ? 'Free model. ' : ''}
+            {selected.vision ? 'Supports "Ask about screen".' : 'Text only: "Ask about screen" is not available with this model.'}
+          </div>
+        )}
       </div>
+
       {p.needsKey && (
         <div style={{ marginTop: 8 }}>
           <input
             type="password"
+            aria-label="API key"
             value={key}
             onChange={(e) => setKey(e.target.value)}
-            placeholder={hasKey ? 'Key saved. Enter a new one to replace it.' : 'API key'}
+            placeholder={hasKey ? `${p.label} key saved. Enter a new one to replace it.` : `${p.label} API key`}
             style={{ width: '100%' }}
           />
-          <button onClick={saveKey}>Save key</button>
         </div>
       )}
+
       <div style={{ marginTop: 8 }}>
-        <button onClick={saveProvider}>Save provider</button>
+        <button onClick={save}>Save</button>
       </div>
-      <p style={{ fontSize: 13, opacity: 0.75 }}>
-        Listening (transcription) uses OpenAI, so it needs an OpenAI key even when answers come from another provider.
-      </p>
+      <p role="status">{status}</p>
+
+      <TranscriptionKey />
+
 
       <h2 style={{ marginTop: 24 }}>Network kill switch</h2>
       <label>
@@ -101,8 +211,6 @@ export function SettingsView() {
         />{' '}
         Block all outbound provider requests
       </label>
-
-      <p>{status}</p>
     </div>
   )
 }

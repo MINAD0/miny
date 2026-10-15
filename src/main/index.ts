@@ -22,6 +22,8 @@ import { installLoopbackHandler } from './capture/loopbackHandler'
 import { captureScreenPng } from './capture/screenshot'
 import { buildVisionMessage, checkVision } from './capture/vision'
 import { findProvider } from '../shared/providers'
+import { fetchOpenRouterModels, ModelInfo } from './providers/modelList'
+import { learnCaps } from './providers/capabilities'
 
 // Tests point the app at a throwaway profile so they never touch real notes.
 if (process.env.MINY_USER_DATA) {
@@ -175,6 +177,15 @@ const listen = createListenLoop({
   }
 })
 
+// Loads OpenRouter's live model list and records which models accept images, so Vision
+// knows about them. Outbound, so the kill switch blocks it.
+async function loadOpenRouterModels(): Promise<ModelInfo[]> {
+  if (registry.isKilled()) throw new Error('Network is disabled by the kill switch')
+  const models = await fetchOpenRouterModels()
+  for (const m of models) learnCaps('openrouter', m.id, { vision: m.vision, contextTokens: m.contextTokens })
+  return models
+}
+
 // Only the main window may call IPC handlers. The overlay has its own receive-only preload.
 function handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: any[]) => unknown) {
   ipcMain.handle(channel, (event, ...args) => {
@@ -229,6 +240,7 @@ function registerIpc() {
     secrets.set(providerId, String(key))
     return true
   })
+  handle('models:list', async (_, providerId: string) => (providerId === 'openrouter' ? loadOpenRouterModels() : []))
   handle('keys:has', (_, providerId: string) => {
     try {
       return secrets.get(providerId) !== null
@@ -308,6 +320,9 @@ function lockDown(contents: WebContents) {
 app.whenReady().then(() => {
   installLoopbackHandler()
   registerIpc()
+
+  // Learn OpenRouter model capabilities in the background so Vision works without opening Settings.
+  if (currentProvider().providerId === 'openrouter') void loadOpenRouterModels().catch(() => undefined)
 
   mainWin = new BrowserWindow({
     width: 1100,

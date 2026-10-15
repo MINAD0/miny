@@ -26,7 +26,7 @@ export function createRegistry(deps: Deps) {
     let apiKey: string | null = null
     if (config.needsKey) {
       apiKey = (deps.secrets.get(config.providerId) ?? '').trim()
-      if (!apiKey) throw new ProviderError('auth', `No API key set for ${config.providerId}`)
+      if (!apiKey) throw new ProviderError('auth', `No API key saved for ${config.providerId}. Add it in Settings.`)
     }
     return { provider: deps.build(config, apiKey), model: config.model }
   }
