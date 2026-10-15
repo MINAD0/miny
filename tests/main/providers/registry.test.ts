@@ -87,6 +87,60 @@ describe('registry', () => {
     expect(stream).toHaveBeenCalledTimes(1)
   })
 
+  it('moves to a fallback model when the main one is rate-limited (busy free model)', async () => {
+    const tried: string[] = []
+    const stream = vi.fn(async function* (req: any) {
+      tried.push(req.model)
+      if (req.model === 'busy:free') throw new ProviderError('rate_limit', 'temporarily rate-limited upstream', 429)
+      yield `answer from ${req.model}`
+    })
+    const reg = createRegistry({ secrets: { get: () => 'k' }, build: () => fakeProvider(vi.fn(), stream), sleep: async () => {} })
+    reg.configure({ ...config, model: 'busy:free', fallbackModels: ['other:free', 'third:free'] })
+    let out = ''
+    for await (const t of reg.stream({ messages: [] })) out += t
+    expect(out).toBe('answer from other:free')
+    expect(tried).toEqual(['busy:free', 'busy:free', 'other:free']) // one short retry, then fallback
+    expect(reg.lastModelUsed()).toBe('other:free')
+  })
+
+  it('call() falls back too, and reports the last error if every model fails', async () => {
+    const complete = vi.fn(async () => {
+      throw new ProviderError('rate_limit', 'busy', 429)
+    })
+    const reg = createRegistry({ secrets: { get: () => 'k' }, build: () => fakeProvider(complete), sleep: async () => {} })
+    reg.configure({ ...config, model: 'a', fallbackModels: ['b'] })
+    await expect(reg.call({ messages: [] })).rejects.toThrow('busy')
+    expect(complete.mock.calls.map((c: any) => c[0].model)).toEqual(['a', 'a', 'b', 'b'])
+  })
+
+  it('does not try other models on an auth error', async () => {
+    const complete = vi.fn(async () => {
+      throw new ProviderError('auth', 'bad key', 401)
+    })
+    const reg = createRegistry({ secrets: { get: () => 'k' }, build: () => fakeProvider(complete), sleep: async () => {} })
+    reg.configure({ ...config, model: 'a', fallbackModels: ['b'] })
+    await expect(reg.call({ messages: [] })).rejects.toMatchObject({ kind: 'auth' })
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('only falls back to image-capable models for a screenshot question', async () => {
+    const tried: string[] = []
+    const complete = vi.fn(async (req: any) => {
+      tried.push(req.model)
+      if (req.model === 'main') throw new ProviderError('other', 'down', 503)
+      return 'ok'
+    })
+    const reg = createRegistry({
+      secrets: { get: () => 'k' },
+      build: () => fakeProvider(complete),
+      sleep: async () => {},
+      supportsVision: (_p, m) => m === 'sees'
+    })
+    reg.configure({ ...config, model: 'main', fallbackModels: ['blind', 'sees'] })
+    await reg.call({ messages: [{ role: 'user', content: [{ type: 'image', mime: 'image/png', base64: 'A' }] }] })
+    expect(tried).toEqual(['main', 'sees'])
+  })
+
   it('does not require a key for local endpoints', async () => {
     const complete = vi.fn(async () => 'local ok')
     const reg = createRegistry({ secrets: { get: () => null }, build: () => fakeProvider(complete), sleep: async () => {} })

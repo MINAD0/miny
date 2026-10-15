@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { PROVIDERS, findProvider } from '../../shared/providers'
 import { cleanIpcError } from './ipcError'
 import { LANGUAGES, LOCAL_MODELS } from '../../shared/transcription'
+import { pickFallbacks } from '../../shared/fallbacks'
 
 type ModelInfo = { id: string; name: string; free: boolean; vision: boolean; contextTokens: number }
 
@@ -207,13 +208,14 @@ export function SettingsView() {
     try {
       setTestResult(await window.miny.providers.test())
     } catch (e) {
-      setTestResult({ ok: false, provider: '', model: '', error: cleanIpcError(e), keyInfo: null })
+      setTestResult({ ok: false, provider: '', model: '', answeredBy: null, error: cleanIpcError(e), keyInfo: null })
     } finally {
       setTesting(false)
     }
   }
 
   const shown = freeOnly ? models.filter((m) => m.free) : models
+  const backups = providerId === 'openrouter' ? pickFallbacks(models, model.trim()) : []
   const selected = models.find((m) => m.id === model.trim())
   const activeLabel = active ? `${findProvider(active.providerId)?.label ?? active.providerId} · ${active.model}` : 'OpenAI · gpt-4o-mini (default)'
 
@@ -261,6 +263,11 @@ export function SettingsView() {
             {selected.vision ? 'Supports "Ask about screen".' : 'Text only: "Ask about screen" is not available with this model.'}
           </div>
         )}
+        {backups.length > 0 && (
+          <div data-testid="backups" style={{ fontSize: 13, opacity: 0.75 }}>
+            Free models are often busy. If this one is, miny automatically tries: {backups.join(', ')}.
+          </div>
+        )}
       </div>
 
       {p.needsKey && (
@@ -286,7 +293,9 @@ export function SettingsView() {
       {testResult && (
         <div data-testid="test-result" style={{ fontSize: 14, color: testResult.ok ? '#1b5e20' : '#b00020' }}>
           {testResult.ok
-            ? `Works: ${testResult.provider} · ${testResult.model} replied "${testResult.reply || '(empty)'}".`
+            ? testResult.answeredBy && testResult.answeredBy !== testResult.model
+              ? `Works: ${testResult.model} was busy, so backup ${testResult.answeredBy} replied "${testResult.reply || '(empty)'}".`
+              : `Works: ${testResult.provider} · ${testResult.model} replied "${testResult.reply || '(empty)'}".`
             : `Failed: ${testResult.provider} · ${testResult.model}: ${testResult.error}`}
           {testResult.keyInfo && <div style={{ color: 'inherit', opacity: 0.85 }}>Key: {testResult.keyInfo}</div>}
         </div>

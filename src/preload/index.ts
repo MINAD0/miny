@@ -34,6 +34,7 @@ const api = {
       ok: boolean
       provider: string
       model: string
+      answeredBy: string | null
       reply?: string
       error?: string
       keyInfo: string | null

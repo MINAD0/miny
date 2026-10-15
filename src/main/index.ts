@@ -24,7 +24,8 @@ import { buildVisionMessage, checkVision } from './capture/vision'
 import { findProvider } from '../shared/providers'
 import { fetchOpenRouterModels, ModelInfo } from './providers/modelList'
 import { describeKeyInfo, fetchOpenRouterKeyInfo } from './providers/openrouterKey'
-import { learnCaps } from './providers/capabilities'
+import { getCaps, learnCaps } from './providers/capabilities'
+import { pickFallbacks } from '../shared/fallbacks'
 import { toSttConfig } from '../shared/transcription'
 
 // Tests point the app at a throwaway profile so they never touch real notes.
@@ -67,9 +68,22 @@ const registry = createRegistry({
   build: (cfg, apiKey) => {
     if (cfg.providerId === 'anthropic') return createAnthropicProvider({ apiKey: apiKey!, baseUrl: cfg.baseUrl })
     return createOpenAICompatProvider({ id: cfg.providerId, baseUrl: cfg.baseUrl, apiKey })
-  }
+  },
+  supportsVision: (providerId, model) => getCaps(providerId, model).vision
 })
-registry.configure(currentProvider())
+
+// Last OpenRouter model list, used to pick backup models for a busy free model.
+let openRouterModels: ModelInfo[] = []
+
+// Applies the saved provider, plus automatic backups when it's a free OpenRouter model.
+function applyProvider(): ProviderConfig {
+  const cfg = currentProvider()
+  const fallbackModels = cfg.providerId === 'openrouter' ? pickFallbacks(openRouterModels, cfg.model) : []
+  const full = { ...cfg, fallbackModels }
+  registry.configure(full)
+  return full
+}
+applyProvider()
 registry.setKillSwitch(readSetting('killswitch', false))
 
 const suggester = createSuggester({ chat: { stream: (req) => registry.stream(req) } })
@@ -185,6 +199,8 @@ async function loadOpenRouterModels(): Promise<ModelInfo[]> {
   if (registry.isKilled()) throw new Error('Network is disabled by the kill switch')
   const models = await fetchOpenRouterModels()
   for (const m of models) learnCaps('openrouter', m.id, { vision: m.vision, contextTokens: m.contextTokens })
+  openRouterModels = models
+  applyProvider() // backups can be chosen now that the list is known
   return models
 }
 
@@ -229,7 +245,7 @@ function registerIpc() {
     if (key === 'llm.provider') {
       const cfg = toProviderConfig(value)
       writeSetting(key, cfg)
-      registry.configure(cfg)
+      applyProvider()
       return true
     }
     // Security-relevant settings have their own handlers and can't be set here.
@@ -261,9 +277,16 @@ function registerIpc() {
     }
     try {
       const reply = await registry.call({ messages: [{ role: 'user', content: 'Reply with the single word OK.' }], maxTokens: 16 })
-      return { ok: true, provider: cfg.providerId, model: cfg.model, reply: reply.trim().slice(0, 100), keyInfo }
+      return {
+        ok: true,
+        provider: cfg.providerId,
+        model: cfg.model,
+        answeredBy: registry.lastModelUsed(),
+        reply: reply.trim().slice(0, 100),
+        keyInfo
+      }
     } catch (e) {
-      return { ok: false, provider: cfg.providerId, model: cfg.model, error: (e as Error).message, keyInfo }
+      return { ok: false, provider: cfg.providerId, model: cfg.model, answeredBy: null, error: (e as Error).message, keyInfo }
     }
   })
   handle('keys:has', (_, providerId: string) => {
