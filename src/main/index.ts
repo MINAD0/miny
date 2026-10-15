@@ -64,6 +64,7 @@ let transcriber: ReturnType<typeof createOpenAITranscriber> | null = null
 
 // Rolling transcript of the current session. Used as context for suggestions and Ask.
 const transcript: Segment[] = []
+let sessionStartedAt = Date.now()
 
 function sendOverlay(item: { id: string; question: string; answer: string; error?: string; partial?: boolean }) {
   overlay?.send('overlay:update', item)
@@ -74,10 +75,14 @@ async function answer(question: string, context: Segment[] | null, kind: 'sugges
   const cfg = readSetting<ProviderConfig>('llm.provider', DEFAULT_PROVIDER)
   tracker.record('suggestion_requested', { provider: cfg.providerId, kind })
   sendOverlay({ id, question, answer: '' })
+  let soFar = ''
+  const onToken = (t: string) => {
+    soFar += t
+    sendOverlay({ id, question, answer: soFar, partial: true })
+  }
   try {
-    const run = kind === 'suggest' ? suggester.suggest(question, context ?? [], (t) => sendOverlay({ id, question, answer: t, partial: true }))
-                                   : suggester.ask(question, context, (t) => sendOverlay({ id, question, answer: t, partial: true }))
-    const full = await run
+    const full =
+      kind === 'suggest' ? await suggester.suggest(question, context ?? [], onToken) : await suggester.ask(question, context, onToken)
     sendOverlay({ id, question, answer: full })
   } catch (e) {
     sendOverlay({ id, question, answer: '', error: (e as Error).message })
@@ -97,7 +102,7 @@ const listen = createListenLoop({
     sendOverlay({ id: String(Date.now()), question: 'Transcription', answer: '', error: (err as Error).message })
   },
   saveSession: (segs) => {
-    const started = Date.now()
+    const started = sessionStartedAt
     const sid = Number(
       db
         .prepare("INSERT INTO sessions (started_at, ended_at, mode) VALUES (?, ?, 'meeting')")
@@ -157,7 +162,8 @@ function registerIpc() {
     const key = secrets.get('openai')
     if (!key) throw new Error('Set your OpenAI key in Settings to use transcription')
     transcript.length = 0
-    transcriber = createOpenAITranscriber({ apiKey: key, model: readSetting('stt.model', 'gpt-4o-transcribe') })
+    sessionStartedAt = Date.now()
+    transcriber =createOpenAITranscriber({ apiKey: key, model: readSetting('stt.model', 'gpt-4o-transcribe') })
     listen.start()
     tracker.record('session_started', { mode: 'meeting' })
     return true

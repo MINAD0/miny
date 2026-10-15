@@ -27,6 +27,47 @@ export function App() {
   )
 }
 
+// Manual Ask and Vision. Answers stream into the overlay.
+function AskBox() {
+  const [question, setQuestion] = useState('')
+  const [useContext, setUseContext] = useState(true)
+  const [error, setError] = useState('')
+
+  const run = async (kind: 'ask' | 'vision') => {
+    const q = question.trim()
+    if (!q) {
+      setError('Type a question first')
+      return
+    }
+    setError('')
+    try {
+      if (kind === 'ask') await window.miny.ask(q, useContext)
+      else await window.miny.vision(q)
+      setQuestion('')
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <input
+        placeholder="Ask a question"
+        value={question}
+        onChange={(e) => setQuestion(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && run('ask')}
+        style={{ width: '60%' }}
+      />{' '}
+      <button onClick={() => run('ask')}>Ask</button>{' '}
+      <button onClick={() => run('vision')}>Ask about screen</button>{' '}
+      <label>
+        <input type="checkbox" checked={useContext} onChange={(e) => setUseContext(e.target.checked)} /> Use transcript
+      </label>
+      {error && <p style={{ color: '#b00020' }}>{error}</p>}
+    </div>
+  )
+}
+
 function ListenView() {
   const [live, setLive] = useState(false)
   const [lines, setLines] = useState<string[]>([])
@@ -66,6 +107,7 @@ function ListenView() {
       <h2>Listen</h2>
       <button onClick={() => (live ? stop('user') : start())}>{live ? 'Stop' : 'Start listening'}</button>
       {error && <p style={{ color: '#b00020' }}>{error}</p>}
+      <AskBox />
       <div style={{ marginTop: 12, whiteSpace: 'pre-wrap' }}>
         {lines.length === 0 ? 'Transcript appears here while listening.' : lines.join('\n')}
       </div>
