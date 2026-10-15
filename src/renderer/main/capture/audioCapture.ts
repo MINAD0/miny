@@ -12,7 +12,14 @@ export async function startCapture(opts: {
   onDeviceLost(): void
 }): Promise<CaptureHandle> {
   const mic = await navigator.mediaDevices.getUserMedia({ audio: true })
-  const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+  let display: MediaStream
+  try {
+    display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+  } catch (e) {
+    // Release the mic if system audio can't be captured, so the mic indicator turns off.
+    mic.getTracks().forEach((t) => t.stop())
+    throw e
+  }
   const sysTracks = display.getAudioTracks()
   display.getVideoTracks().forEach((t) => t.stop())
 
@@ -38,11 +45,17 @@ export async function startCapture(opts: {
       r.ondataavailable = (e) => {
         if (e.data.size) parts.push(e.data)
       }
-      r.onstop = async () => {
+      r.onstop = () => {
         const endMs = performance.now() - t0
+        // Register the upload before resolving, so stop() always waits for it,
+        // and resolve right away so the next recorder starts with minimal gap.
         if (parts.length) {
-          const bytes = new Uint8Array(await new Blob(parts, { type: mime }).arrayBuffer())
-          pending.push(Promise.resolve(opts.onChunk(bytes, mime, startMs, endMs)).catch(() => undefined))
+          pending.push(
+            (async () => {
+              const bytes = new Uint8Array(await new Blob(parts, { type: mime }).arrayBuffer())
+              await opts.onChunk(bytes, mime, startMs, endMs)
+            })().catch(() => undefined)
+          )
         }
         resolve()
       }
@@ -65,18 +78,23 @@ export async function startCapture(opts: {
   mic.getAudioTracks().forEach((t) => t.addEventListener('ended', deviceEnded))
   sysTracks.forEach((t) => t.addEventListener('ended', deviceEnded))
 
+  let stopping: Promise<void> | null = null
   return {
     // Resolves after the final partial chunk is flushed and every chunk upload has finished.
-    async stop() {
-      running = false
-      clearTimeout(timer)
-      const r = current as MediaRecorder | null
-      if (r && r.state !== 'inactive') r.stop()
-      await loop
-      await Promise.allSettled(pending)
-      mic.getTracks().forEach((t) => t.stop())
-      display.getTracks().forEach((t) => t.stop())
-      await ctx.close()
+    // Safe to call more than once.
+    stop() {
+      stopping ??= (async () => {
+        running = false
+        clearTimeout(timer)
+        const r = current as MediaRecorder | null
+        if (r && r.state !== 'inactive') r.stop()
+        await loop
+        await Promise.allSettled(pending)
+        mic.getTracks().forEach((t) => t.stop())
+        display.getTracks().forEach((t) => t.stop())
+        await ctx.close()
+      })()
+      return stopping
     }
   }
 }

@@ -11,6 +11,15 @@ describe('openai transcriber', () => {
     expect(url).toBe('https://api.openai.com/v1/audio/transcriptions')
     expect(init.body).toBeInstanceOf(FormData)
     expect((init.body as FormData).get('model')).toBe('test-model')
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('maps a stuck upload to a timeout error', async () => {
+    const f = vi.fn(async () => {
+      throw Object.assign(new Error('timed out'), { name: 'TimeoutError' })
+    })
+    const t = createOpenAITranscriber({ apiKey: 'k', model: 'm', fetch: f as any })
+    await expect(t.transcribe({ bytes: new Uint8Array([1]), mime: 'audio/webm' })).rejects.toMatchObject({ kind: 'timeout' })
   })
 
   it('returns empty text for silent chunks instead of throwing', async () => {

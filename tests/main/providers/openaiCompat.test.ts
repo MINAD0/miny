@@ -54,6 +54,43 @@ describe('openai-compatible provider', () => {
     await expect(p.complete({ model: 'm', messages: [] })).rejects.toMatchObject({ kind: 'rate_limit' })
   })
 
+  it('streams CRLF-framed responses (common from local servers)', async () => {
+    const sse = 'data: {"choices":[{"delta":{"content":"he"}}]}\r\n\r\ndata: {"choices":[{"delta":{"content":"y"}}]}\r\n\r\ndata: [DONE]\r\n\r\n'
+    const f = vi.fn(async () => new Response(sse, { status: 200 }))
+    const p = createOpenAICompatProvider({ id: 'ollama', baseUrl: 'https://x', apiKey: null, fetch: f as any })
+    let out = ''
+    for await (const chunk of p.stream({ model: 'm', messages: [] })) out += chunk
+    expect(out).toBe('hey')
+  })
+
+  it('raises an error sent mid-stream instead of ending quietly', async () => {
+    const sse = 'data: {"choices":[{"delta":{"content":"par"}}]}\n\ndata: {"error":{"code":502,"message":"upstream died"}}\n\n'
+    const f = vi.fn(async () => new Response(sse, { status: 200 }))
+    const p = createOpenAICompatProvider({ id: 'openrouter', baseUrl: 'https://x', apiKey: 'k', fetch: f as any })
+    const got: string[] = []
+    await expect(
+      (async () => {
+        for await (const c of p.stream({ model: 'm', messages: [] })) got.push(c)
+      })()
+    ).rejects.toThrow(/upstream died/)
+    expect(got).toEqual(['par'])
+  })
+
+  it('maps a timeout to the timeout kind', async () => {
+    const f = vi.fn(async () => {
+      throw Object.assign(new Error('timed out'), { name: 'TimeoutError' })
+    })
+    const p = createOpenAICompatProvider({ id: 'openai', baseUrl: 'https://x', apiKey: 'k', fetch: f as any })
+    await expect(p.complete({ model: 'm', messages: [] })).rejects.toMatchObject({ kind: 'timeout' })
+  })
+
+  it('always sends a timeout signal', async () => {
+    const f = vi.fn(async () => json({ choices: [{ message: { content: 'x' } }] }))
+    const p = createOpenAICompatProvider({ id: 'openai', baseUrl: 'https://x', apiKey: 'k', fetch: f as any })
+    await p.complete({ model: 'm', messages: [] })
+    expect((f.mock.calls[0] as any)[1].signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('streams SSE deltas', async () => {
     const sse =
       'data: {"choices":[{"delta":{"content":"he"}}]}\n\ndata: {"choices":[{"delta":{"content":"llo"}}]}\n\ndata: [DONE]\n\n'

@@ -3,6 +3,7 @@ import { NotesView } from './NotesView'
 import { SettingsView } from './SettingsView'
 import { ActivityView } from './ActivityView'
 import { startCapture, CaptureHandle } from './capture/audioCapture'
+import { cleanIpcError } from './ipcError'
 
 type Tab = 'listen' | 'notes' | 'settings' | 'activity'
 
@@ -18,7 +19,10 @@ export function App() {
         ))}
       </nav>
       <main style={{ flex: 1, padding: 16, overflow: 'auto' }}>
-        {tab === 'listen' && <ListenView />}
+        {/* Listen stays mounted while hidden, so switching tabs never orphans a running capture. */}
+        <div style={{ display: tab === 'listen' ? 'block' : 'none' }}>
+          <ListenView />
+        </div>
         {tab === 'notes' && <NotesView />}
         {tab === 'settings' && <SettingsView />}
         {tab === 'activity' && <ActivityView />}
@@ -45,7 +49,7 @@ function AskBox() {
       else await window.miny.vision(q)
       setQuestion('')
     } catch (e) {
-      setError((e as Error).message)
+      setError(cleanIpcError(e))
     }
   }
 
@@ -68,48 +72,92 @@ function AskBox() {
   )
 }
 
+type Phase = 'idle' | 'starting' | 'live' | 'stopping'
+type Seg = { t_start: number; t_end: number; text: string }
+
 function ListenView() {
-  const [live, setLive] = useState(false)
-  const [lines, setLines] = useState<string[]>([])
+  const [phase, setPhaseState] = useState<Phase>('idle')
+  const phaseRef = useRef<Phase>('idle')
+  const setPhase = (p: Phase) => {
+    phaseRef.current = p
+    setPhaseState(p)
+  }
+  const [segments, setSegments] = useState<Seg[]>([])
   const [error, setError] = useState('')
   const handle = useRef<CaptureHandle | null>(null)
 
-  useEffect(() => window.miny.listen.onSegment((seg) => setLines((prev) => [...prev, seg.text])), [])
+  // Keep lines in time order; chunks can finish transcribing out of order.
+  useEffect(
+    () =>
+      window.miny.listen.onSegment((seg) =>
+        setSegments((prev) => [...prev, seg].sort((a, b) => a.t_start - b.t_start))
+      ),
+    []
+  )
 
   const stop = async (reason: 'user' | 'device_lost') => {
-    const h = handle.current
-    handle.current = null
-    setLive(false)
-    // Flush the final partial chunk and wait for uploads before the session is saved.
-    await h?.stop()
-    const result = await window.miny.listen.stop()
-    if (reason === 'device_lost') setError('The audio device was lost. The transcript so far is saved as a note.')
-    return result
+    if (phaseRef.current !== 'live') return // ignore a second stop, or a stop while starting
+    setPhase('stopping')
+    try {
+      // Flush the final partial chunk and wait for uploads before the session is saved.
+      await handle.current?.stop()
+      handle.current = null
+      const { sessionId } = await window.miny.listen.stop()
+      if (reason === 'device_lost') {
+        setError(
+          sessionId === null
+            ? 'The audio device was lost. Nothing was transcribed, so no note was saved.'
+            : 'The audio device was lost. The transcript so far is saved as a note.'
+        )
+      }
+    } catch (e) {
+      setError(cleanIpcError(e))
+    } finally {
+      setPhase('idle')
+    }
   }
 
   const start = async () => {
+    if (phaseRef.current !== 'idle') return
+    setPhase('starting')
     setError('')
     try {
       await window.miny.listen.start()
+    } catch (e) {
+      setError(cleanIpcError(e))
+      setPhase('idle')
+      return
+    }
+    try {
       handle.current = await startCapture({
         onChunk: (bytes, mime, s, e) => window.miny.listen.chunk(bytes, mime, s, e),
         onDeviceLost: () => void stop('device_lost')
       })
-      setLines([])
-      setLive(true)
+      setSegments([])
+      setPhase('live')
     } catch (e) {
-      setError((e as Error).message)
+      // Capture failed (e.g. no permission): end the session the main process started.
+      await window.miny.listen.stop().catch(() => undefined)
+      setError(`Could not start audio capture: ${cleanIpcError(e)}`)
+      setPhase('idle')
     }
   }
+
+  const label = { idle: 'Start listening', starting: 'Starting…', live: 'Stop', stopping: 'Saving…' }[phase]
 
   return (
     <div>
       <h2>Listen</h2>
-      <button onClick={() => (live ? stop('user') : start())}>{live ? 'Stop' : 'Start listening'}</button>
+      <button
+        disabled={phase === 'starting' || phase === 'stopping'}
+        onClick={() => (phase === 'live' ? stop('user') : start())}
+      >
+        {label}
+      </button>
       {error && <p style={{ color: '#b00020' }}>{error}</p>}
       <AskBox />
       <div style={{ marginTop: 12, whiteSpace: 'pre-wrap' }}>
-        {lines.length === 0 ? 'Transcript appears here while listening.' : lines.join('\n')}
+        {segments.length === 0 ? 'Transcript appears here while listening.' : segments.map((s) => s.text).join('\n')}
       </div>
     </div>
   )

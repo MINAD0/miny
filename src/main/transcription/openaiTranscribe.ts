@@ -1,7 +1,10 @@
-import { errorFromStatus, ProviderError } from '../providers/types'
+import { errorFromStatus, fromFetchError } from '../providers/types'
 import type { Transcriber } from './types'
 
 type Opts = { apiKey: string; model: string; baseUrl?: string; fetch?: typeof fetch }
+
+// A stuck upload must not block the session from stopping and saving.
+const TRANSCRIBE_TIMEOUT_MS = 30_000
 
 export function createOpenAITranscriber(opts: Opts): Transcriber {
   const f = opts.fetch ?? fetch
@@ -16,9 +19,14 @@ export function createOpenAITranscriber(opts: Opts): Transcriber {
 
       let res: Response
       try {
-        res = await f(url, { method: 'POST', headers: { Authorization: `Bearer ${opts.apiKey}` }, body: form })
-      } catch (e: any) {
-        throw new ProviderError('other', String(e?.message ?? e))
+        res = await f(url, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${opts.apiKey}` },
+          body: form,
+          signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS)
+        })
+      } catch (e) {
+        throw fromFetchError(e)
       }
       if (!res.ok) throw errorFromStatus(res.status, await res.text())
       const data = (await res.json()) as { text: string }

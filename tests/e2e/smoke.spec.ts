@@ -13,9 +13,46 @@ test.beforeEach(async () => {
   page = await app.firstWindow()
 })
 
+// The overlay window is created after the main window, so wait for it.
+async function overlayWindow(): Promise<Page> {
+  const existing = app.windows().find((w) => w !== page)
+  if (existing) return existing
+  return app.waitForEvent('window')
+}
+
 test.afterEach(async () => {
-  await app.close()
+  await app.close().catch(() => undefined) // some tests quit the app themselves
   rmSync(profile, { recursive: true, force: true })
+})
+
+test('switching provider loads that provider default model', async () => {
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await page.getByLabel('Provider', { exact: true }).selectOption('anthropic')
+  await expect(page.getByLabel('Model')).toHaveValue('claude-haiku-5-5')
+  await page.getByLabel('Provider', { exact: true }).selectOption('ollama')
+  await expect(page.getByLabel('Model')).toHaveValue('llama3')
+})
+
+test('the overlay window cannot reach notes, settings, or keys', async () => {
+  const overlay = await overlayWindow()
+  const exposed = await overlay.evaluate(() => Object.keys((window as any).miny ?? {}))
+  expect(exposed).toEqual(['onOverlayUpdate'])
+})
+
+test('exporting two notes with the same title writes two files', async () => {
+  await page.getByRole('button', { name: 'notes', exact: true }).click()
+  await page.getByRole('button', { name: 'New note' }).click()
+  await page.getByRole('button', { name: 'Export .md' }).click()
+  await expect(page.getByText(/Exported to .*Untitled\.md/)).toBeVisible()
+  await page.getByRole('button', { name: 'New note' }).click()
+  await page.getByRole('button', { name: 'Export .md' }).click()
+  await expect(page.getByText(/Exported to .*Untitled \(2\)\.md/)).toBeVisible()
+})
+
+test('closing the main window quits the app', async () => {
+  const closed = new Promise<void>((resolve) => app.on('close', () => resolve()))
+  await page.close()
+  await closed
 })
 
 test('creates, edits, favorites, and searches a note', async () => {
@@ -56,7 +93,7 @@ test('Ask with the kill switch on shows the block in the overlay, without a netw
   await page.getByPlaceholder('Ask a question').fill('What is a closure?')
   await page.getByRole('button', { name: 'Ask', exact: true }).click()
 
-  const overlay = app.windows().find((w) => w !== page)!
+  const overlay = await overlayWindow()
   await expect(overlay.getByText('What is a closure?')).toBeVisible()
   await expect(overlay.getByText(/kill switch/i)).toBeVisible()
 })

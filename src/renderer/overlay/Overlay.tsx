@@ -10,7 +10,8 @@ export function Overlay() {
     return window.miny.onOverlayUpdate((item: Item) => {
       setItems((prev) => {
         const i = prev.findIndex((p) => p.id === item.id)
-        if (i === -1) return [...prev.slice(-4), item]
+        // Updates for an answer already scrolled out are dropped, so old streams can't push newer ones out.
+        if (i === -1) return item.partial ? prev : [...prev.slice(-4), item]
         const copy = [...prev]
         copy[i] = item
         return copy

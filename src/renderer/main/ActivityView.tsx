@@ -14,6 +14,7 @@ export function ActivityView() {
   const grant = async (on: boolean) => {
     await window.miny.tracking.setConsent(on)
     setConsent(on)
+    setLog(await window.miny.tracking.log())
   }
 
   return (

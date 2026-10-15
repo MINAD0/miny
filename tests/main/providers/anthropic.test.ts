@@ -47,6 +47,33 @@ describe('anthropic provider', () => {
     })
   })
 
+  it('streams text deltas', async () => {
+    const sse =
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi "}}\n\n' +
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"there"}}\n\n' +
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    const f = vi.fn(async () => new Response(sse, { status: 200 }))
+    const p = createAnthropicProvider({ apiKey: 'k', fetch: f as any })
+    let out = ''
+    for await (const c of p.stream({ model: 'm', messages: [] })) out += c
+    expect(out).toBe('hi there')
+  })
+
+  it('turns a mid-stream overloaded error into a retryable rate_limit error', async () => {
+    const sse =
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n' +
+      'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'
+    const f = vi.fn(async () => new Response(sse, { status: 200 }))
+    const p = createAnthropicProvider({ apiKey: 'k', fetch: f as any })
+    await expect(
+      (async () => {
+        for await (const _ of p.stream({ model: 'm', messages: [] })) {
+          // drain
+        }
+      })()
+    ).rejects.toMatchObject({ kind: 'rate_limit' })
+  })
+
   it('maps 401 to auth', async () => {
     const f = vi.fn(async () => new Response('bad key', { status: 401 }))
     const p = createAnthropicProvider({ apiKey: 'x', fetch: f as any })

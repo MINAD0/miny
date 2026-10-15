@@ -33,6 +33,10 @@ export class ProviderError extends Error {
   }
 }
 
+// Default request timeouts. Streams get longer because a full answer takes time.
+export const COMPLETE_TIMEOUT_MS = 60_000
+export const STREAM_TIMEOUT_MS = 120_000
+
 export function errorFromStatus(status: number, body: string): ProviderError {
   if (status === 401 || status === 403) return new ProviderError('auth', `Authentication failed (${status})`, status)
   if (status === 429) return new ProviderError('rate_limit', 'Rate limit reached', status)
@@ -40,4 +44,12 @@ export function errorFromStatus(status: number, body: string): ProviderError {
     return new ProviderError('unsupported', 'This model does not accept images', status)
   }
   return new ProviderError('other', `Provider error ${status}: ${body.slice(0, 200)}`, status)
+}
+
+// Turns a fetch or body-read failure into a ProviderError.
+export function fromFetchError(e: unknown): ProviderError {
+  if (e instanceof ProviderError) return e
+  const err = e as { name?: string; message?: string }
+  if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return new ProviderError('timeout', 'Request timed out')
+  return new ProviderError('other', String(err?.message ?? e))
 }

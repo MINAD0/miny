@@ -54,6 +54,39 @@ describe('registry', () => {
     expect(stream).not.toHaveBeenCalled()
   })
 
+  it('retries a stream that is rate limited before its first token', async () => {
+    let calls = 0
+    const stream = vi.fn(async function* () {
+      calls++
+      if (calls < 3) throw new ProviderError('rate_limit', 'slow')
+      yield 'ok'
+    })
+    const sleep = vi.fn(async (_ms: number) => {})
+    const reg = createRegistry({ secrets: { get: () => 'k' }, build: () => fakeProvider(vi.fn(), stream), sleep })
+    reg.configure(config)
+    let out = ''
+    for await (const t of reg.stream({ messages: [] })) out += t
+    expect(out).toBe('ok')
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([500, 1000])
+  })
+
+  it('does not retry a stream that fails after text was shown', async () => {
+    const stream = vi.fn(async function* () {
+      yield 'part'
+      throw new ProviderError('rate_limit', 'slow')
+    })
+    const reg = createRegistry({ secrets: { get: () => 'k' }, build: () => fakeProvider(vi.fn(), stream), sleep: async () => {} })
+    reg.configure(config)
+    const got: string[] = []
+    await expect(
+      (async () => {
+        for await (const t of reg.stream({ messages: [] })) got.push(t)
+      })()
+    ).rejects.toMatchObject({ kind: 'rate_limit' })
+    expect(got).toEqual(['part'])
+    expect(stream).toHaveBeenCalledTimes(1)
+  })
+
   it('does not require a key for local endpoints', async () => {
     const complete = vi.fn(async () => 'local ok')
     const reg = createRegistry({ secrets: { get: () => null }, build: () => fakeProvider(complete), sleep: async () => {} })

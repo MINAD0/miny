@@ -19,6 +19,16 @@ describe('isQuestion', () => {
     expect(isQuestion('مرحبا، كيف حالك؟')).toBe(true)
   })
 
+  it('reads contractions by their first word', () => {
+    expect(isQuestion("What's your name")).toBe(true)
+    expect(isQuestion("How's the project going")).toBe(true)
+  })
+
+  it('does not treat common statements as questions', () => {
+    expect(isQuestion('Will do, thanks.')).toBe(false)
+    expect(isQuestion('من الشركة جئت')).toBe(false)
+  })
+
   it('does not panic on text with only punctuation', () => {
     expect(() => isQuestion('???')).not.toThrow()
   })

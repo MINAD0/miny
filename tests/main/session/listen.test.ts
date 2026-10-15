@@ -70,6 +70,56 @@ describe('listen loop', () => {
     expect(saveSession.mock.calls[0][0].map((s: any) => s.text)).toEqual(['last question?'])
   })
 
+  it('keeps two sessions separate when the user restarts during a slow stop', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const texts = ['A', 'B', 'C']
+    let i = 0
+    const transcribe = vi.fn(async () => {
+      const t = texts[i++]
+      if (t === 'B') await gate
+      return { text: t }
+    })
+    const saved: string[][] = []
+    const loop = createListenLoop({
+      transcriber: { transcribe },
+      onSegment: vi.fn(),
+      onError: vi.fn(),
+      saveSession: (segs) => {
+        saved.push(segs.map((s) => s.text))
+        return saved.length
+      }
+    })
+    loop.start()
+    await loop.pushChunk(new Uint8Array([1]), 'audio/webm', 0, 5000) // A done
+    void loop.pushChunk(new Uint8Array([2]), 'audio/webm', 5000, 10000) // B in flight
+    const firstStop = loop.stop('user')
+    loop.start() // restart before the first stop finishes
+    await loop.pushChunk(new Uint8Array([3]), 'audio/webm', 0, 5000) // C, new session
+    release()
+    await firstStop
+    await loop.stop('user')
+    expect(saved).toEqual([['A', 'B'], ['C']])
+  })
+
+  it('saves once even if stop is called twice', async () => {
+    const saveSession = vi.fn((_segs: any[]) => 1)
+    const loop = createListenLoop({ transcriber: { transcribe: async () => ({ text: 'x' }) }, onSegment: vi.fn(), onError: vi.fn(), saveSession })
+    loop.start()
+    await loop.pushChunk(new Uint8Array([1]), 'audio/webm', 0, 5000)
+    await Promise.all([loop.stop('user'), loop.stop('device_lost')])
+    expect(saveSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not save an empty session', async () => {
+    const saveSession = vi.fn((_segs: any[]) => 1)
+    const loop = createListenLoop({ transcriber: { transcribe: async () => ({ text: '' }) }, onSegment: vi.fn(), onError: vi.fn(), saveSession })
+    loop.start()
+    await loop.pushChunk(new Uint8Array([1]), 'audio/webm', 0, 5000)
+    expect((await loop.stop('user')).sessionId).toBeNull()
+    expect(saveSession).not.toHaveBeenCalled()
+  })
+
   it('ignores chunks that arrive after stop', async () => {
     const transcribe = vi.fn(async () => ({ text: 'late' }))
     const loop = createListenLoop({ transcriber: { transcribe }, onSegment: vi.fn(), onError: vi.fn(), saveSession: () => 1 })

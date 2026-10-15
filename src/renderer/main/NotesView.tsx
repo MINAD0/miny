@@ -74,12 +74,20 @@ export function NotesView() {
     setDraft({ ...draft, ...patch })
   }
 
+  const openId = useRef<number | null>(null)
+  const [exported, setExported] = useState('')
+
   const open = async (n: Note) => {
     await flushDraft()
+    openId.current = n.id
     setSelected(n)
     setDraft({ id: n.id, title: n.title, body_md: n.body_md })
     dirty.current = false
-    setTags((await window.miny.notes.tags(n.id)).join(', '))
+    setExported('')
+    setTags('')
+    const t = await window.miny.notes.tags(n.id)
+    // Ignore a late reply if the user has already switched to another note.
+    if (openId.current === n.id) setTags(t.join(', '))
   }
 
   // Checkbox and folder changes are single clicks, so they save immediately.
@@ -206,11 +214,12 @@ export function NotesView() {
             <button
               onClick={async () => {
                 await flushDraft()
-                await window.miny.notes.export(selected.id)
+                setExported(`Exported to ${await window.miny.notes.export(selected.id)}`)
               }}
             >
               Export .md
             </button>
+            {exported && <span style={{ marginLeft: 8, fontSize: 13 }}>{exported}</span>}
           </div>
           {error && <p style={{ color: '#b00020' }}>{error}</p>}
         </section>

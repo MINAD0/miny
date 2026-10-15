@@ -61,8 +61,25 @@ export function createRegistry(deps: Deps) {
     },
     stream(req: Omit<ChatRequest, 'model'>): AsyncIterable<string> {
       // Checks run synchronously here, so a blocked call throws before any stream starts.
-      const { provider, model } = resolve()
-      return provider.stream({ ...req, model })
+      const first = resolve()
+      return (async function* () {
+        for (let attempt = 0; ; attempt++) {
+          const { provider, model } = attempt === 0 ? first : resolve()
+          let yielded = false
+          try {
+            for await (const t of provider.stream({ ...req, model })) {
+              yielded = true
+              yield t
+            }
+            return
+          } catch (e) {
+            // Retry only before any text reached the user; a retry after that would duplicate it.
+            const retryable = e instanceof ProviderError && e.kind === 'rate_limit' && !yielded
+            if (!retryable || attempt >= BACKOFF_MS.length) throw e
+            await deps.sleep(BACKOFF_MS[attempt])
+          }
+        }
+      })()
     }
   }
 }
