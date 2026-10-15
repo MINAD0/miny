@@ -60,6 +60,16 @@ test('one Save stores an OpenRouter key and makes OpenRouter the provider in use
   await expect(overlay.getByText(/for openai/i)).toHaveCount(0)
 })
 
+test('Test connection reports the exact reason a request fails', async () => {
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await page.getByLabel(/Block all outbound/).check()
+  await page.getByLabel('Provider', { exact: true }).selectOption('openrouter')
+  await page.getByLabel('API key', { exact: true }).fill('sk-or-v1-test')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.getByRole('button', { name: 'Test connection' }).click()
+  await expect(page.getByTestId('test-result')).toContainText(/Failed: openrouter .*kill switch/i)
+})
+
 test('Save without a key asks for one instead of silently keeping the old provider', async () => {
   await page.getByRole('button', { name: 'settings', exact: true }).click()
   await page.getByLabel(/Block all outbound/).check()

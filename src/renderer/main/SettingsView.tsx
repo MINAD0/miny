@@ -197,6 +197,22 @@ export function SettingsView() {
     }
   }
 
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<Awaited<ReturnType<typeof window.miny.providers.test>> | null>(null)
+
+  // Tests the provider in use (the saved one), showing the provider's exact error if any.
+  const testConnection = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      setTestResult(await window.miny.providers.test())
+    } catch (e) {
+      setTestResult({ ok: false, provider: '', model: '', error: cleanIpcError(e), keyInfo: null })
+    } finally {
+      setTesting(false)
+    }
+  }
+
   const shown = freeOnly ? models.filter((m) => m.free) : models
   const selected = models.find((m) => m.id === model.trim())
   const activeLabel = active ? `${findProvider(active.providerId)?.label ?? active.providerId} · ${active.model}` : 'OpenAI · gpt-4o-mini (default)'
@@ -261,9 +277,20 @@ export function SettingsView() {
       )}
 
       <div style={{ marginTop: 8 }}>
-        <button onClick={save}>Save</button>
+        <button onClick={save}>Save</button>{' '}
+        <button onClick={testConnection} disabled={testing}>
+          {testing ? 'Testing…' : 'Test connection'}
+        </button>
       </div>
       <p role="status">{status}</p>
+      {testResult && (
+        <div data-testid="test-result" style={{ fontSize: 14, color: testResult.ok ? '#1b5e20' : '#b00020' }}>
+          {testResult.ok
+            ? `Works: ${testResult.provider} · ${testResult.model} replied "${testResult.reply || '(empty)'}".`
+            : `Failed: ${testResult.provider} · ${testResult.model}: ${testResult.error}`}
+          {testResult.keyInfo && <div style={{ color: 'inherit', opacity: 0.85 }}>Key: {testResult.keyInfo}</div>}
+        </div>
+      )}
 
       <TranscriptionSettings />
 

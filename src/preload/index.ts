@@ -29,6 +29,16 @@ const api = {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: unknown) => ipcRenderer.invoke('settings:set', key, value)
   },
+  providers: {
+    test: (): Promise<{
+      ok: boolean
+      provider: string
+      model: string
+      reply?: string
+      error?: string
+      keyInfo: string | null
+    }> => ipcRenderer.invoke('providers:test')
+  },
   models: {
     list: (
       providerId: string

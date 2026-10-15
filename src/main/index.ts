@@ -23,6 +23,7 @@ import { captureScreenPng } from './capture/screenshot'
 import { buildVisionMessage, checkVision } from './capture/vision'
 import { findProvider } from '../shared/providers'
 import { fetchOpenRouterModels, ModelInfo } from './providers/modelList'
+import { describeKeyInfo, fetchOpenRouterKeyInfo } from './providers/openrouterKey'
 import { learnCaps } from './providers/capabilities'
 import { toSttConfig } from '../shared/transcription'
 
@@ -242,6 +243,29 @@ function registerIpc() {
     return true
   })
   handle('models:list', async (_, providerId: string) => (providerId === 'openrouter' ? loadOpenRouterModels() : []))
+
+  // Sends a tiny request to the active provider and reports the exact result or error.
+  // For OpenRouter it also reports the key's spending limit and free-model quota.
+  handle('providers:test', async () => {
+    const cfg = currentProvider()
+    let keyInfo: string | null = null
+    if (cfg.providerId === 'openrouter' && !registry.isKilled()) {
+      const key = (secrets.get('openrouter') ?? '').trim()
+      if (key) {
+        try {
+          keyInfo = describeKeyInfo(await fetchOpenRouterKeyInfo(key))
+        } catch (e) {
+          keyInfo = `could not read key details: ${(e as Error).message}`
+        }
+      }
+    }
+    try {
+      const reply = await registry.call({ messages: [{ role: 'user', content: 'Reply with the single word OK.' }], maxTokens: 16 })
+      return { ok: true, provider: cfg.providerId, model: cfg.model, reply: reply.trim().slice(0, 100), keyInfo }
+    } catch (e) {
+      return { ok: false, provider: cfg.providerId, model: cfg.model, error: (e as Error).message, keyInfo }
+    }
+  })
   handle('keys:has', (_, providerId: string) => {
     try {
       return secrets.get(providerId) !== null
