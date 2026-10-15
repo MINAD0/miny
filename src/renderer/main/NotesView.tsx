@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type Note = {
   id: number
@@ -11,6 +11,9 @@ type Note = {
 }
 type Folder = { id: number; name: string; parent_id: number | null }
 type Filter = { kind: 'all' } | { kind: 'favorites' } | { kind: 'archived' } | { kind: 'folder'; id: number }
+type Draft = { id: number; title: string; body_md: string }
+
+const SAVE_DELAY_MS = 400
 
 export function NotesView() {
   const [notes, setNotes] = useState<Note[]>([])
@@ -18,6 +21,10 @@ export function NotesView() {
   const [filter, setFilter] = useState<Filter>({ kind: 'all' })
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Note | null>(null)
+  // Title and body are edited locally and saved after typing pauses, so keystrokes
+  // never wait on a round trip to the main process.
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const dirty = useRef(false)
   const [tags, setTags] = useState('')
   const [newFolder, setNewFolder] = useState('')
   const [error, setError] = useState('')
@@ -43,12 +50,40 @@ export function NotesView() {
     void refresh()
   }, [query, filter])
 
+  const flushDraft = async () => {
+    if (!draft || !dirty.current) return
+    dirty.current = false
+    try {
+      const updated = await window.miny.notes.update(draft.id, { title: draft.title, body_md: draft.body_md })
+      setSelected((s) => (s && s.id === updated.id ? updated : s))
+      void refresh()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  useEffect(() => {
+    if (!draft || !dirty.current) return
+    const t = setTimeout(() => void flushDraft(), SAVE_DELAY_MS)
+    return () => clearTimeout(t)
+  }, [draft])
+
+  const editDraft = (patch: Partial<Omit<Draft, 'id'>>) => {
+    if (!draft) return
+    dirty.current = true
+    setDraft({ ...draft, ...patch })
+  }
+
   const open = async (n: Note) => {
+    await flushDraft()
     setSelected(n)
+    setDraft({ id: n.id, title: n.title, body_md: n.body_md })
+    dirty.current = false
     setTags((await window.miny.notes.tags(n.id)).join(', '))
   }
 
-  const save = async (patch: Partial<Note>) => {
+  // Checkbox and folder changes are single clicks, so they save immediately.
+  const saveMeta = async (patch: Partial<Pick<Note, 'favorite' | 'archived' | 'folder_id'>>) => {
     if (!selected) return
     try {
       const updated = await window.miny.notes.update(selected.id, patch)
@@ -72,7 +107,7 @@ export function NotesView() {
     })
     setQuery('')
     await refresh()
-    void open(n)
+    await open(n)
   }
 
   const createFolder = async () => {
@@ -108,7 +143,11 @@ export function NotesView() {
         </div>
         <div style={{ marginTop: 12 }}>
           {notes.map((n) => (
-            <div key={n.id} onClick={() => open(n)} style={{ padding: 6, cursor: 'pointer', fontWeight: selected?.id === n.id ? 700 : 400 }}>
+            <div
+              key={n.id}
+              onClick={() => open(n)}
+              style={{ padding: 6, cursor: 'pointer', fontWeight: selected?.id === n.id ? 700 : 400 }}
+            >
               {n.favorite ? '★ ' : ''}
               {n.title || 'Untitled'}
             </div>
@@ -116,19 +155,28 @@ export function NotesView() {
         </div>
       </aside>
 
-      {selected && (
+      {selected && draft && (
         <section style={{ flex: 1 }}>
-          <input value={selected.title} onChange={(e) => save({ title: e.target.value })} style={{ width: '100%', fontSize: 18 }} />
+          <input
+            aria-label="Note title"
+            value={draft.title}
+            onChange={(e) => editDraft({ title: e.target.value })}
+            onBlur={() => void flushDraft()}
+            style={{ width: '100%', fontSize: 18 }}
+          />
           <div style={{ marginTop: 8, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             <label>
-              <input type="checkbox" checked={selected.favorite} onChange={(e) => save({ favorite: e.target.checked })} /> Favorite
+              <input type="checkbox" checked={selected.favorite} onChange={(e) => saveMeta({ favorite: e.target.checked })} /> Favorite
             </label>
             <label>
-              <input type="checkbox" checked={selected.archived} onChange={(e) => save({ archived: e.target.checked })} /> Archived
+              <input type="checkbox" checked={selected.archived} onChange={(e) => saveMeta({ archived: e.target.checked })} /> Archived
             </label>
             <label>
               Folder{' '}
-              <select value={selected.folder_id ?? ''} onChange={(e) => save({ folder_id: e.target.value ? Number(e.target.value) : null })}>
+              <select
+                value={selected.folder_id ?? ''}
+                onChange={(e) => saveMeta({ folder_id: e.target.value ? Number(e.target.value) : null })}
+              >
                 <option value="">(none)</option>
                 {folders.map((f) => (
                   <option key={f.id} value={f.id}>
@@ -139,11 +187,30 @@ export function NotesView() {
             </label>
           </div>
           <div style={{ marginTop: 8 }}>
-            <input placeholder="Tags, comma separated" value={tags} onChange={(e) => setTags(e.target.value)} onBlur={saveTags} style={{ width: '100%' }} />
+            <input
+              placeholder="Tags, comma separated"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              onBlur={saveTags}
+              style={{ width: '100%' }}
+            />
           </div>
-          <textarea value={selected.body_md} onChange={(e) => save({ body_md: e.target.value })} style={{ width: '100%', height: '60vh', marginTop: 8 }} />
+          <textarea
+            aria-label="Note body"
+            value={draft.body_md}
+            onChange={(e) => editDraft({ body_md: e.target.value })}
+            onBlur={() => void flushDraft()}
+            style={{ width: '100%', height: '60vh', marginTop: 8 }}
+          />
           <div style={{ marginTop: 8 }}>
-            <button onClick={() => window.miny.notes.export(selected.id)}>Export .md</button>
+            <button
+              onClick={async () => {
+                await flushDraft()
+                await window.miny.notes.export(selected.id)
+              }}
+            >
+              Export .md
+            </button>
           </div>
           {error && <p style={{ color: '#b00020' }}>{error}</p>}
         </section>

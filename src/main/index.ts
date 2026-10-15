@@ -10,6 +10,8 @@ import { createRegistry, ProviderConfig } from './providers/registry'
 import { createOpenAICompatProvider } from './providers/openaiCompat'
 import { createAnthropicProvider } from './providers/anthropic'
 import { createOpenAITranscriber } from './transcription/openaiTranscribe'
+import { guardTranscriber } from './transcription/guard'
+import type { Transcriber } from './transcription/types'
 import { createListenLoop, Segment } from './session/listen'
 import { createSuggester } from './session/suggest'
 import { detectQuestions } from './session/questionDetector'
@@ -60,7 +62,7 @@ const suggester = createSuggester({ chat: { stream: (req) => registry.stream(req
 
 let overlay: ReturnType<typeof createOverlay> | null = null
 let mainWin: BrowserWindow | null = null
-let transcriber: ReturnType<typeof createOpenAITranscriber> | null = null
+let transcriber: Transcriber | null = null
 
 // Rolling transcript of the current session. Used as context for suggestions and Ask.
 const transcript: Segment[] = []
@@ -163,7 +165,10 @@ function registerIpc() {
     if (!key) throw new Error('Set your OpenAI key in Settings to use transcription')
     transcript.length = 0
     sessionStartedAt = Date.now()
-    transcriber =createOpenAITranscriber({ apiKey: key, model: readSetting('stt.model', 'gpt-4o-transcribe') })
+    transcriber = guardTranscriber(
+      createOpenAITranscriber({ apiKey: key, model: readSetting('stt.model', 'gpt-4o-transcribe') }),
+      () => registry.isKilled()
+    )
     listen.start()
     tracker.record('session_started', { mode: 'meeting' })
     return true

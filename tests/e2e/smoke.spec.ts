@@ -21,11 +21,25 @@ test.afterEach(async () => {
 test('creates, edits, favorites, and searches a note', async () => {
   await page.getByRole('button', { name: 'notes', exact: true }).click()
   await page.getByRole('button', { name: 'New note' }).click()
-  const title = page.locator('input[value="Untitled"]')
-  await title.fill('Kubernetes prep')
+  await page.getByLabel('Note title').fill('Kubernetes prep')
   await page.getByLabel('Favorite').check()
+  await page.getByLabel('Note body').click() // blur the title so it saves
   await page.getByPlaceholder('Search notes').fill('kubernetes')
   await expect(page.getByText('Kubernetes prep')).toBeVisible()
+})
+
+test('fast typing in the note body keeps every character after leaving and returning', async () => {
+  await page.getByRole('button', { name: 'notes', exact: true }).click()
+  await page.getByRole('button', { name: 'New note' }).click()
+  const text = 'The quick brown fox jumps over the lazy dog 0123456789'
+  await page.getByLabel('Note body').pressSequentially(text, { delay: 0 })
+  await expect(page.getByLabel('Note body')).toHaveValue(text)
+
+  // Leave the notes view (this blurs and saves), then come back and reopen the note.
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await page.getByRole('button', { name: 'notes', exact: true }).click()
+  await page.getByText('Untitled', { exact: true }).click()
+  await expect(page.getByLabel('Note body')).toHaveValue(text)
 })
 
 test('kill switch can be turned on from settings and persists', async () => {

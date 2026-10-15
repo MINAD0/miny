@@ -50,6 +50,9 @@ export function createRegistry(deps: Deps) {
     setKillSwitch(on: boolean) {
       killed = on
     },
+    isKilled(): boolean {
+      return killed
+    },
     call(req: Omit<ChatRequest, 'model'>): Promise<string> {
       return withRetry(() => {
         const { provider, model } = resolve()

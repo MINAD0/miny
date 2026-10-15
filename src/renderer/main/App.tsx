@@ -77,9 +77,11 @@ function ListenView() {
   useEffect(() => window.miny.listen.onSegment((seg) => setLines((prev) => [...prev, seg.text])), [])
 
   const stop = async (reason: 'user' | 'device_lost') => {
-    handle.current?.stop()
+    const h = handle.current
     handle.current = null
     setLive(false)
+    // Flush the final partial chunk and wait for uploads before the session is saved.
+    await h?.stop()
     const result = await window.miny.listen.stop()
     if (reason === 'device_lost') setError('The audio device was lost. The transcript so far is saved as a note.')
     return result
@@ -90,9 +92,7 @@ function ListenView() {
     try {
       await window.miny.listen.start()
       handle.current = await startCapture({
-        onChunk: (bytes, mime, s, e) => {
-          void window.miny.listen.chunk(bytes, mime, s, e)
-        },
+        onChunk: (bytes, mime, s, e) => window.miny.listen.chunk(bytes, mime, s, e),
         onDeviceLost: () => void stop('device_lost')
       })
       setLines([])

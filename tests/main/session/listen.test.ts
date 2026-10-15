@@ -36,7 +36,7 @@ describe('listen loop', () => {
     })
     loop.start()
     await loop.pushChunk(new Uint8Array([1]), 'audio/webm', 0, 5000)
-    const { sessionId } = loop.stop('device_lost')
+    const { sessionId } = await loop.stop('device_lost')
     expect(sessionId).toBe(42)
     expect(saveSession.mock.calls[0][0].map((s: any) => s.text)).toEqual(['partial words'])
   })
@@ -53,11 +53,28 @@ describe('listen loop', () => {
     expect(onSegment.mock.calls.map((c) => c[0].text)).toEqual(['ok'])
   })
 
+  it('waits for a chunk still being transcribed before saving the session', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const transcribe = vi.fn(async () => {
+      await gate
+      return { text: 'last question?' }
+    })
+    const saveSession = vi.fn((_segs: any[]) => 7)
+    const loop = createListenLoop({ transcriber: { transcribe }, onSegment: vi.fn(), onError: vi.fn(), saveSession })
+    loop.start()
+    void loop.pushChunk(new Uint8Array([1]), 'audio/webm', 0, 5000)
+    const stopping = loop.stop('user')
+    release()
+    await stopping
+    expect(saveSession.mock.calls[0][0].map((s: any) => s.text)).toEqual(['last question?'])
+  })
+
   it('ignores chunks that arrive after stop', async () => {
     const transcribe = vi.fn(async () => ({ text: 'late' }))
     const loop = createListenLoop({ transcriber: { transcribe }, onSegment: vi.fn(), onError: vi.fn(), saveSession: () => 1 })
     loop.start()
-    loop.stop('user')
+    await loop.stop('user')
     await loop.pushChunk(new Uint8Array([1]), 'audio/webm', 0, 5000)
     expect(transcribe).not.toHaveBeenCalled()
   })
