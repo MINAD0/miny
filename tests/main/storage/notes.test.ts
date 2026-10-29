@@ -84,4 +84,17 @@ describe('notes repo', () => {
     repo.setTags(n.id, ['c'])
     expect(repo.tagsFor(n.id)).toEqual(['c'])
   })
+
+  it('round-trips the raw transcript and session Q&A', () => {
+    const n = repo.create({
+      title: 'Session',
+      body_md: 'summary',
+      transcript: 'line one\nline two',
+      qa: [{ question: 'Why?', answer: 'Because.' }]
+    })
+    const got = repo.get(n.id)!
+    expect(got.transcript).toBe('line one\nline two')
+    expect(got.qa).toEqual([{ question: 'Why?', answer: 'Because.' }])
+    expect(repo.list({ archived: false })[0].qa).toHaveLength(1)
+  })
 })

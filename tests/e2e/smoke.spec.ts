@@ -90,12 +90,38 @@ test('the transcription key saves without changing the provider in use', async (
   await expect(page.getByTestId('active-provider')).toContainText('Ollama')
 })
 
+test('resume, context documents, and answer style survive leaving Settings', async () => {
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+
+  await page.getByLabel('Resume name').fill('resume.txt')
+  await page.getByLabel('Resume text').fill('Backend engineer. Built the billing service.')
+  await page.getByRole('button', { name: 'Save resume' }).click()
+  await expect(page.getByText('Resume saved. Answers about your experience will use it.')).toBeVisible()
+
+  await page.getByLabel('Context document name').fill('Job description')
+  await page.getByLabel('Context document text').fill('We need someone who knows Postgres.')
+  await page.getByRole('button', { name: 'Add document' }).click()
+  await expect(page.getByRole('listitem').filter({ hasText: 'Job description' })).toBeVisible()
+
+  await page.getByLabel('Answer length').selectOption('short')
+  await page.getByLabel('Answer vocabulary').selectOption('simple')
+  await expect(page.getByText('Answer style saved.')).toBeVisible()
+
+  // Switching tabs unmounts Settings; the values must come back from the database.
+  await page.getByRole('button', { name: 'notes', exact: true }).click()
+  await page.getByRole('button', { name: 'settings', exact: true }).click()
+
+  await expect(page.getByLabel('Resume text')).toHaveValue('Backend engineer. Built the billing service.')
+  await expect(page.getByRole('listitem').filter({ hasText: 'Job description' })).toBeVisible()
+  await expect(page.getByLabel('Answer length')).toHaveValue('short')
+  await expect(page.getByLabel('Answer vocabulary')).toHaveValue('simple')
+})
+
 test('the overlay window cannot reach notes, settings, or keys', async () => {
   const overlay = await overlayWindow()
   const exposed = await overlay.evaluate(() => Object.keys((window as any).miny ?? {}))
   expect(exposed).toEqual(['onOverlayUpdate'])
 })
-
 test('exporting two notes with the same title writes two files', async () => {
   await page.getByRole('button', { name: 'notes', exact: true }).click()
   await page.getByRole('button', { name: 'New note' }).click()

@@ -5,11 +5,24 @@ import { ActivityView } from './ActivityView'
 import { startCapture, CaptureHandle } from './capture/audioCapture'
 import { cleanIpcError } from './ipcError'
 import { loadWhisper, transcribeChunk } from './whisper/localWhisper'
+import { onHotkey } from './hotkeys'
 
 type Tab = 'listen' | 'notes' | 'settings' | 'activity'
 
 export function App() {
   const [tab, setTab] = useState<Tab>('listen')
+
+  // A shortcut always brings the Listen view forward; the view itself handles
+  // starting, stopping, focusing the Ask box, or triggering Vision.
+  useEffect(() => {
+    const offs = [
+      onHotkey('toggleListen', () => setTab('listen')),
+      onHotkey('focusAsk', () => setTab('listen')),
+      onHotkey('vision', () => setTab('listen'))
+    ]
+    return () => offs.forEach((off) => off())
+  }, [])
+
   return (
     <div style={{ fontFamily: 'system-ui', display: 'flex', height: '100vh' }}>
       <nav style={{ width: 160, padding: 12, borderRight: '1px solid #ddd' }}>
@@ -37,6 +50,7 @@ function AskBox() {
   const [question, setQuestion] = useState('')
   const [useContext, setUseContext] = useState(true)
   const [error, setError] = useState('')
+  const input = useRef<HTMLInputElement>(null)
 
   const run = async (kind: 'ask' | 'vision') => {
     const q = question.trim()
@@ -54,9 +68,26 @@ function AskBox() {
     }
   }
 
+  useEffect(() => onHotkey('focusAsk', () => input.current?.focus()), [])
+
+  // The Vision shortcut uses whatever is already typed, so one keystroke can
+  // capture the screen and ask about it without touching the mouse.
+  useEffect(
+    () =>
+      onHotkey('vision', () => {
+        if (question.trim()) void run('vision')
+        else {
+          input.current?.focus()
+          setError('Type a question about the screen first, then press the screen shortcut.')
+        }
+      }),
+    [question, useContext]
+  )
+
   return (
     <div style={{ marginTop: 16 }}>
       <input
+        ref={input}
         placeholder="Ask a question"
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
@@ -68,6 +99,9 @@ function AskBox() {
       <label>
         <input type="checkbox" checked={useContext} onChange={(e) => setUseContext(e.target.checked)} /> Use transcript
       </label>
+      <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4 }}>
+        Ctrl+Shift+L start/stop · Ctrl+Shift+A ask · Ctrl+Shift+V screen · Ctrl+Shift+Space overlay
+      </div>
       {error && <p style={{ color: '#b00020' }}>{error}</p>}
     </div>
   )
@@ -169,6 +203,17 @@ function ListenView() {
       setPhase('idle')
     }
   }
+
+  // Global Ctrl+Shift+L mirrors the Start/Stop button. The view stays mounted
+  // while another tab is open, so a session can be controlled from anywhere.
+  useEffect(
+    () =>
+      onHotkey('toggleListen', () => {
+        if (phaseRef.current === 'live') void stop('user')
+        else if (phaseRef.current === 'idle') void start()
+      }),
+    []
+  )
 
   const label = { idle: 'Start listening', starting: 'Starting…', live: 'Stop', stopping: 'Saving…' }[phase]
 

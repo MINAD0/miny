@@ -64,6 +64,17 @@ export function createRegistry(deps: Deps) {
     configure(c: ProviderConfig) {
       config = c
     },
+    // True when a call could be made now: configured, kill switch off, key present.
+    // Background work (session summaries) uses this so a missing key is skipped
+    // instead of becoming a failed request.
+    available(): boolean {
+      try {
+        resolve()
+        return true
+      } catch {
+        return false
+      }
+    },
     setKillSwitch(on: boolean) {
       killed = on
     },

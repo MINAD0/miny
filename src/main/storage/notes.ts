@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import type { QaPair } from '../../shared/qa'
 
 export type Note = {
   id: number
@@ -8,15 +9,34 @@ export type Note = {
   favorite: boolean
   archived: boolean
   session_id: number | null
+  // Raw transcript for session notes. Empty for handwritten notes.
+  transcript: string
+  // Questions detected during the session and the answers that were given.
+  qa: QaPair[]
   created_at: number
   updated_at: number
 }
 
 export type Folder = { id: number; name: string; parent_id: number | null }
 
-type Row = Omit<Note, 'favorite' | 'archived'> & { favorite: number; archived: number }
+type Row = Omit<Note, 'favorite' | 'archived' | 'qa'> & { favorite: number; archived: number; qa_json: string }
 
-const toNote = (r: Row): Note => ({ ...r, favorite: !!r.favorite, archived: !!r.archived })
+function parseQa(raw: unknown): QaPair[] {
+  try {
+    const value = JSON.parse(String(raw ?? '[]'))
+    if (!Array.isArray(value)) return []
+    return value
+      .filter((v): v is QaPair => !!v && typeof v.question === 'string' && typeof v.answer === 'string')
+      .map((v) => ({ question: v.question, answer: v.answer }))
+  } catch {
+    return []
+  }
+}
+
+const toNote = (r: Row): Note => {
+  const { qa_json, ...rest } = r
+  return { ...rest, favorite: !!r.favorite, archived: !!r.archived, qa: parseQa(qa_json) }
+}
 
 // Wrap user text as an FTS5 phrase so operators like " or * are treated literally.
 const ftsPhrase = (q: string) => '"' + q.replace(/"/g, '""') + '"'
@@ -30,18 +50,27 @@ export function createNotesRepo(db: Database.Database) {
   }
 
   return {
-    create(input: { title?: string; body_md?: string; folder_id?: number | null; session_id?: number | null }): Note {
+    create(input: {
+      title?: string
+      body_md?: string
+      folder_id?: number | null
+      session_id?: number | null
+      transcript?: string
+      qa?: QaPair[]
+    }): Note {
       const t = now()
       const info = db
         .prepare(
-          `INSERT INTO notes (title, body_md, folder_id, session_id, created_at, updated_at)
-           VALUES (@title, @body_md, @folder_id, @session_id, @t, @t)`
+          `INSERT INTO notes (title, body_md, folder_id, session_id, transcript, qa_json, created_at, updated_at)
+           VALUES (@title, @body_md, @folder_id, @session_id, @transcript, @qa_json, @t, @t)`
         )
         .run({
           title: input.title ?? '',
           body_md: input.body_md ?? '',
           folder_id: input.folder_id ?? null,
           session_id: input.session_id ?? null,
+          transcript: input.transcript ?? '',
+          qa_json: JSON.stringify(input.qa ?? []),
           t
         })
       return getNote(Number(info.lastInsertRowid))!

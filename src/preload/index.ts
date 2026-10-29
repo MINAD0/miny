@@ -19,7 +19,17 @@ const api = {
     search: (q: string) => ipcRenderer.invoke('notes:search', q),
     tags: (id: number) => ipcRenderer.invoke('notes:tags', id),
     setTags: (id: number, tags: string[]) => ipcRenderer.invoke('notes:setTags', id, tags),
-    export: (id: number) => ipcRenderer.invoke('notes:export', id)
+    export: (id: number) => ipcRenderer.invoke('notes:export', id),
+    summarize: (id: number) => ipcRenderer.invoke('notes:summarize', id),
+    onChanged: (cb: (payload: { id: number }) => void) => subscribe('notes:changed', cb)
+  },
+  context: {
+    list: (): Promise<
+      { id: number; kind: 'resume' | 'document'; name: string; text: string; created_at: number; updated_at: number }[]
+    > => ipcRenderer.invoke('context:list'),
+    saveResume: (name: string, text: string) => ipcRenderer.invoke('context:saveResume', name, text),
+    add: (name: string, text: string) => ipcRenderer.invoke('context:add', name, text),
+    remove: (id: number) => ipcRenderer.invoke('context:remove', id)
   },
   folders: {
     list: () => ipcRenderer.invoke('folders:list'),
@@ -77,7 +87,9 @@ const api = {
     wipe: () => ipcRenderer.invoke('tracking:wipe')
   },
   killSwitch: (on: boolean) => ipcRenderer.invoke('killswitch:set', on),
-  onOverlayUpdate: (cb: (item: any) => void) => subscribe('overlay:update', cb)
+  onOverlayUpdate: (cb: (item: any) => void) => subscribe('overlay:update', cb),
+  // Global shortcuts (Ctrl+Shift+L/A/V by default) forward their action here.
+  onHotkey: (cb: (name: 'toggleListen' | 'focusAsk' | 'vision') => void) => subscribe('hotkey', cb)
 }
 
 contextBridge.exposeInMainWorld('miny', api)

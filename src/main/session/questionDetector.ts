@@ -28,6 +28,19 @@ export function isQuestion(text: string): boolean {
   return text.split(/(?<=[.!?؟])\s+/).some(isQuestionSentence)
 }
 
+// Short reactions that only make sense attached to the previous question.
+// Whisper transcribes these without a "?" often enough that the openers above
+// miss them ("and why", "how so", "et pourquoi").
+const FOLLOW_UP =
+  /^(and|so|but|then|also|ok(ay)?|right|really|why|how|what about|can you (elaborate|expand)|could you (elaborate|expand)|et|alors|donc|pourquoi|comment|وكيف|ولماذا|وماذا|وهل|وأين|ومتى|و|طيب|لماذا|كيف)(?!\p{L})/iu
+
+export function isFollowUp(text: string): boolean {
+  const t = text.trim()
+  if (!t || t.length > 120) return false
+  if (t.split(/\s+/).length > 12) return false
+  return FOLLOW_UP.test(t)
+}
+
 export function detectQuestions(segments: Segment[]): Segment[] {
   return segments.filter((s) => isQuestion(s.text))
 }

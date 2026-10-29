@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { cleanIpcError } from './ipcError'
+
+type Qa = { question: string; answer: string }
 
 type Note = {
   id: number
@@ -7,6 +10,9 @@ type Note = {
   folder_id: number | null
   favorite: boolean
   archived: boolean
+  session_id: number | null
+  transcript: string
+  qa: Qa[]
   updated_at: number
 }
 type Folder = { id: number; name: string; parent_id: number | null }
@@ -28,6 +34,9 @@ export function NotesView() {
   const [tags, setTags] = useState('')
   const [newFolder, setNewFolder] = useState('')
   const [error, setError] = useState('')
+  const [summarizing, setSummarizing] = useState(false)
+  const [summaryStatus, setSummaryStatus] = useState('')
+  const openId = useRef<number | null>(null)
 
   const refresh = async () => {
     setFolders(await window.miny.folders.list())
@@ -49,6 +58,26 @@ export function NotesView() {
   useEffect(() => {
     void refresh()
   }, [query, filter])
+
+  // A background summary updates the note after the session is saved. Reload
+  // both the list and the open note so the new title and body appear at once.
+  const refreshRef = useRef(refresh)
+  refreshRef.current = refresh
+  useEffect(
+    () =>
+      window.miny.notes.onChanged(async ({ id }) => {
+        await refreshRef.current()
+        if (openId.current !== id) return
+        const n = await window.miny.notes.get(id)
+        if (!n) return
+        setSelected(n)
+        // The user may be typing while a background summary arrives. Their draft
+        // wins; it is flushed normally and will overwrite the generated body.
+        if (dirty.current) return
+        setDraft({ id: n.id, title: n.title, body_md: n.body_md })
+      }),
+    []
+  )
 
   const flushDraft = async () => {
     if (!draft || !dirty.current) return
@@ -74,7 +103,6 @@ export function NotesView() {
     setDraft({ ...draft, ...patch })
   }
 
-  const openId = useRef<number | null>(null)
   const [exported, setExported] = useState('')
 
   const open = async (n: Note) => {
@@ -109,6 +137,25 @@ export function NotesView() {
   const saveTags = async () => {
     if (!selected) return
     await window.miny.notes.setTags(selected.id, tags.split(',').map((t) => t.trim()))
+  }
+
+  const summarize = async () => {
+    if (!selected) return
+    await flushDraft()
+    setSummarizing(true)
+    setSummaryStatus('Writing a summary from the transcript…')
+    try {
+      const n = (await window.miny.notes.summarize(selected.id)) as Note
+      setSelected(n)
+      setDraft({ id: n.id, title: n.title, body_md: n.body_md })
+      dirty.current = false
+      setSummaryStatus('Summary regenerated.')
+      await refresh()
+    } catch (e) {
+      setSummaryStatus(cleanIpcError(e))
+    } finally {
+      setSummarizing(false)
+    }
   }
 
   const createNote = async () => {
@@ -211,8 +258,29 @@ export function NotesView() {
             value={draft.body_md}
             onChange={(e) => editDraft({ body_md: e.target.value })}
             onBlur={() => void flushDraft()}
-            style={{ width: '100%', height: '60vh', marginTop: 8 }}
+            style={{ width: '100%', height: '45vh', marginTop: 8 }}
           />
+          {selected.transcript && (
+            <details style={{ marginTop: 8 }}>
+              <summary>Transcript</summary>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 13, maxHeight: '30vh', overflow: 'auto' }}>
+                {selected.transcript}
+              </pre>
+            </details>
+          )}
+          {selected.qa?.length > 0 && (
+            <details style={{ marginTop: 8 }}>
+              <summary>Questions and answers ({selected.qa.length})</summary>
+              <div style={{ fontSize: 13, maxHeight: '30vh', overflow: 'auto' }}>
+                {selected.qa.map((p, i) => (
+                  <div key={i} style={{ marginTop: 8 }}>
+                    <div style={{ opacity: 0.7 }}>{p.question}</div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{p.answer}</div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
           <div style={{ marginTop: 8 }}>
             <button
               onClick={async () => {
@@ -221,8 +289,14 @@ export function NotesView() {
               }}
             >
               Export .md
-            </button>
+            </button>{' '}
+            {selected.session_id !== null && (
+              <button onClick={summarize} disabled={summarizing}>
+                {summarizing ? 'Summarizing…' : 'Regenerate summary'}
+              </button>
+            )}
             {exported && <span style={{ marginLeft: 8, fontSize: 13 }}>{exported}</span>}
+            {summaryStatus && <span style={{ marginLeft: 8, fontSize: 13, opacity: 0.8 }}>{summaryStatus}</span>}
           </div>
           {error && <p style={{ color: '#b00020' }}>{error}</p>}
         </section>

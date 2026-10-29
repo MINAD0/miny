@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectQuestions, isQuestion } from '../../../src/main/session/questionDetector'
+import { detectQuestions, isFollowUp, isQuestion } from '../../../src/main/session/questionDetector'
 
 describe('isQuestion', () => {
   it.each([
@@ -64,5 +64,24 @@ describe('detectQuestions', () => {
       { t_start: 10, t_end: 15, text: 'I like hiking' }
     ]
     expect(detectQuestions(segs).map((s) => s.t_start)).toEqual([5])
+  })
+})
+
+describe('isFollowUp', () => {
+  it('recognises short continuations of the previous question', () => {
+    for (const text of ['and why', 'How so?', 'what about caching', 'Could you elaborate', 'et pourquoi', 'then what', 'وكيف', 'طيب لماذا']) {
+      expect(isFollowUp(text)).toBe(true)
+    }
+  })
+
+  it('does not match a longer word that merely starts the same way', () => {
+    expect(isFollowUp('android development')).toBe(false)
+    expect(isFollowUp('software design')).toBe(false)
+  })
+
+  it('ignores standalone statements, long text, and empty input', () => {
+    expect(isFollowUp('Thanks, that makes sense.')).toBe(false)
+    expect(isFollowUp('')).toBe(false)
+    expect(isFollowUp('and ' + 'word '.repeat(20))).toBe(false)
   })
 })

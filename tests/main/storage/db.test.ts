@@ -15,7 +15,7 @@ describe('openDb', () => {
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view')").all() as { name: string }[]).map(
       (r) => r.name
     )
-    for (const t of ['notes', 'folders', 'tags', 'note_tags', 'sessions', 'segments', 'events', 'settings', 'notes_fts']) {
+    for (const t of ['notes', 'folders', 'tags', 'note_tags', 'sessions', 'segments', 'events', 'settings', 'notes_fts', 'context_docs']) {
       expect(names).toContain(t)
     }
   })
@@ -26,7 +26,7 @@ describe('openDb', () => {
     const file = join(dir, 'test.db')
     openDb(file).close()
     const b = openDb(file)
-    expect(b.pragma('user_version', { simple: true })).toBe(1)
+    expect(b.pragma('user_version', { simple: true })).toBe(2)
     b.close()
   })
 })

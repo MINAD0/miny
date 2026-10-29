@@ -16,7 +16,8 @@ import { guardTranscriber } from './transcription/guard'
 import type { Transcriber } from './transcription/types'
 import { createListenLoop, Segment } from './session/listen'
 import { createSuggester } from './session/suggest'
-import { isQuestion } from './session/questionDetector'
+import { isFollowUp, isQuestion } from './session/questionDetector'
+import { generateSummary, transcriptText } from './session/summary'
 import { createOverlay } from './overlay'
 import { installLoopbackHandler } from './capture/loopbackHandler'
 import { captureScreenPng } from './capture/screenshot'
@@ -27,6 +28,9 @@ import { describeKeyInfo, fetchOpenRouterKeyInfo } from './providers/openrouterK
 import { getCaps, learnCaps } from './providers/capabilities'
 import { pickFallbacks } from '../shared/fallbacks'
 import { toSttConfig } from '../shared/transcription'
+import { toAnswerStyle } from '../shared/answerStyle'
+import { createContextStore } from './context/store'
+import type { QaPair } from '../shared/qa'
 
 // Tests point the app at a throwaway profile so they never touch real notes.
 if (process.env.MINY_USER_DATA) {
@@ -38,6 +42,7 @@ mkdirSync(dataDir, { recursive: true })
 const db = openDb(join(dataDir, 'miny.db'))
 const notes = createNotesRepo(db)
 const tracker = createTracker(db)
+const contextStore = createContextStore(db)
 const secrets = createSecretStore({ safeStorage, file: join(dataDir, 'secrets.json') })
 
 function readSetting<T>(key: string, fallback: T): T {
@@ -60,6 +65,11 @@ function currentProvider(): ProviderConfig {
   } catch {
     return DEFAULT_PROVIDER
   }
+}
+
+// Answer length, vocabulary, and optional translation. Re-validated on read.
+function currentAnswerStyle() {
+  return toAnswerStyle(readSetting('answer.style', null))
 }
 
 const registry = createRegistry({
@@ -86,7 +96,11 @@ function applyProvider(): ProviderConfig {
 applyProvider()
 registry.setKillSwitch(readSetting('killswitch', false))
 
-const suggester = createSuggester({ chat: { stream: (req) => registry.stream(req) } })
+const suggester = createSuggester({
+  chat: { stream: (req) => registry.stream(req) },
+  context: () => contextStore.promptContext(),
+  style: () => currentAnswerStyle()
+})
 
 let overlay: ReturnType<typeof createOverlay> | null = null
 let mainWin: BrowserWindow | null = null
@@ -95,6 +109,43 @@ let transcriber: Transcriber | null = null
 // Rolling transcript of the current session, kept in time order. Used as context for suggestions and Ask.
 const transcript: Segment[] = []
 let sessionStartedAt = Date.now()
+
+// Questions/answers for the running session, saved with its note.
+let sessionQa: QaPair[] = []
+let lastQuestion = ''
+let lastQuestionAt = 0
+// Answers still streaming. Stop waits briefly so their text reaches the note.
+const inFlightAnswers = new Set<Promise<unknown>>()
+// Summaries running after a session was saved. Quit waits for them.
+const pendingSummaries = new Set<Promise<void>>()
+let shuttingDown = false
+
+async function waitForAnswers(ms: number): Promise<void> {
+  if (!inFlightAnswers.size) return
+  await Promise.race([
+    Promise.allSettled([...inFlightAnswers]),
+    new Promise<void>((resolve) => setTimeout(resolve, ms))
+  ])
+}
+
+// The note is saved with the raw transcript immediately. If a provider is
+// available, a structured summary replaces the body shortly after (smog does the
+// same through its note_summary module). Failure leaves the transcript intact.
+function scheduleSummary(noteId: number, segments: Segment[], qa: QaPair[]): void {
+  if (!registry.available()) return
+  const job = (async () => {
+    // Let answers that were still streaming when Stop was pressed reach the note.
+    await waitForAnswers(8000)
+    const summary = await generateSummary({ call: (req) => registry.call(req) }, segments, qa)
+    // The app may be quitting (database already closed) by the time a slow
+    // provider replies. The raw transcript is already saved, so drop the update.
+    if (!summary || shuttingDown || !notes.get(noteId)) return
+    notes.update(noteId, { title: summary.title, body_md: summary.content })
+    sendMain('notes:changed', { id: noteId })
+  })().catch(() => undefined)
+  pendingSummaries.add(job)
+  void job.finally(() => pendingSummaries.delete(job))
+}
 
 let overlaySeq = 0
 const nextOverlayId = () => `${Date.now()}-${++overlaySeq}`
@@ -112,22 +163,36 @@ function recordRequest(name: string, props: Record<string, unknown>) {
   if (!registry.isKilled()) tracker.record(name, props)
 }
 
-async function answer(question: string, context: Segment[] | null, kind: 'suggest' | 'ask') {
+function answer(question: string, context: Segment[] | null, kind: 'suggest' | 'ask'): Promise<void> {
   const id = nextOverlayId()
   recordRequest('suggestion_requested', { provider: currentProvider().providerId, kind })
   sendOverlay({ id, question, answer: '' })
-  let soFar = ''
-  const onToken = (t: string) => {
-    soFar += t
-    sendOverlay({ id, question, answer: soFar, partial: true })
-  }
-  try {
-    const full =
-      kind === 'suggest' ? await suggester.suggest(question, context ?? [], onToken) : await suggester.ask(question, context, onToken)
-    sendOverlay({ id, question, answer: full || '(no answer returned)' })
-  } catch (e) {
-    sendOverlay({ id, question, answer: soFar, error: (e as Error).message })
-  }
+
+  const run = (async () => {
+    let soFar = ''
+    const onToken = (t: string) => {
+      soFar += t
+      sendOverlay({ id, question, answer: soFar, partial: true })
+    }
+    try {
+      const full =
+        kind === 'suggest' ? await suggester.suggest(question, context ?? [], onToken) : await suggester.ask(question, context, onToken)
+      // Keep the answer with the session. It goes into the note and gives the
+      // summary prompt a record of what was already covered.
+      const text = (full || '').trim()
+      if (text) {
+        sessionQa.push({ question, answer: text })
+        if (sessionQa.length > 100) sessionQa.shift()
+      }
+      sendOverlay({ id, question, answer: full || '(no answer returned)' })
+    } catch (e) {
+      sendOverlay({ id, question, answer: soFar, error: (e as Error).message })
+    }
+  })()
+
+  inFlightAnswers.add(run)
+  void run.finally(() => inFlightAnswers.delete(run))
+  return run
 }
 
 // Auto-suggestions run one at a time. If questions arrive while one is answering,
@@ -165,7 +230,15 @@ const listen = createListenLoop({
   onSegment: (seg) => {
     insertInOrder(transcript, seg)
     sendMain('listen:segment', seg)
-    if (isQuestion(seg.text)) void autoSuggest(seg.text)
+    if (isQuestion(seg.text)) {
+      lastQuestion = seg.text
+      lastQuestionAt = Date.now()
+      void autoSuggest(seg.text)
+    } else if (lastQuestion && Date.now() - lastQuestionAt < 60_000 && isFollowUp(seg.text)) {
+      // "and why?" / "how so?" only mean something with the question before it.
+      lastQuestionAt = Date.now()
+      void autoSuggest(`${lastQuestion}\nFollow-up: ${seg.text}`)
+    }
   },
   onError: (err) => {
     sendOverlay({ id: nextOverlayId(), question: 'Transcription', answer: '', error: (err as Error).message })
@@ -173,23 +246,34 @@ const listen = createListenLoop({
   saveSession: (segs) => {
     const cfg = currentProvider()
     const started = sessionStartedAt
+    const qa = sessionQa.slice()
+    const raw = transcriptText(segs)
     // One transaction, so a failure can't leave a session without its note.
-    return db.transaction(() => {
-      const sid = Number(
+    let noteId = 0
+    const sid = db.transaction(() => {
+      const id = Number(
         db
           .prepare("INSERT INTO sessions (started_at, ended_at, mode, provider, model) VALUES (?, ?, 'meeting', ?, ?)")
           .run(started, Date.now(), cfg.providerId, cfg.model).lastInsertRowid
       )
       const ins = db.prepare('INSERT INTO segments (session_id, t_start, t_end, text) VALUES (?, ?, ?, ?)')
-      for (const s of segs) ins.run(sid, s.t_start, s.t_end, s.text)
-      notes.create({
+      for (const s of segs) ins.run(id, s.t_start, s.t_end, s.text)
+      const note = notes.create({
         title: `Session ${new Date(started).toLocaleString()}`,
-        body_md: segs.map((s) => s.text).join('\n'),
-        session_id: sid
+        // The transcript is the note until a summary replaces it. If no provider
+        // is available, this is what the user keeps.
+        body_md: raw,
+        transcript: raw,
+        qa,
+        session_id: id
       })
-      tracker.record('session_saved', { segments: segs.length })
-      return sid
+      noteId = note.id
+      tracker.record('session_saved', { segments: segs.length, questions: qa.length })
+      return id
     })()
+    // Summary runs after the commit, so a slow model never holds the write lock.
+    scheduleSummary(noteId, segs, qa)
+    return sid
   }
 })
 
@@ -231,6 +315,33 @@ function registerIpc() {
     return path
   })
 
+  // Rebuild a session note's summary from its stored segments.
+  handle('notes:summarize', async (_, id: number) => {
+    const n = notes.get(Number(id))
+    if (!n) throw new Error('note not found')
+    if (!n.session_id) throw new Error('This note has no session to summarize')
+    if (!registry.available()) throw new Error('Connect a provider first (or turn off the kill switch)')
+    const segs = db
+      .prepare('SELECT t_start, t_end, text FROM segments WHERE session_id = ? ORDER BY t_start')
+      .all(n.session_id) as Segment[]
+    if (!segs.length) throw new Error('This session has no transcript')
+    const summary = await generateSummary({ call: (req) => registry.call(req) }, segs, n.qa)
+    if (!summary) throw new Error('The provider did not return a usable summary')
+    const updated = notes.update(n.id, { title: summary.title, body_md: summary.content })
+    sendMain('notes:changed', { id: n.id })
+    return updated
+  })
+
+  // Resume and context documents. These are the facts the model may use for
+  // personal questions ("tell me about yourself"); they are never invented.
+  handle('context:list', () => contextStore.list())
+  handle('context:saveResume', (_, name, text) => contextStore.saveResume(name, text))
+  handle('context:add', (_, name, text) => contextStore.addDocument(name, text))
+  handle('context:remove', (_, id: number) => {
+    contextStore.removeDocument(Number(id))
+    return true
+  })
+
   // Folders
   handle('folders:list', () => notes.listFolders())
   handle('folders:create', (_, name: string) => {
@@ -246,6 +357,10 @@ function registerIpc() {
       const cfg = toProviderConfig(value)
       writeSetting(key, cfg)
       applyProvider()
+      return true
+    }
+    if (key === 'answer.style') {
+      writeSetting(key, toAnswerStyle(value))
       return true
     }
     // Security-relevant settings have their own handlers and can't be set here.
@@ -324,12 +439,19 @@ function registerIpc() {
       }
     }
     transcript.length = 0
+    sessionQa = []
+    lastQuestion = ''
+    lastQuestionAt = 0
     sessionStartedAt = Date.now()
     listen.start()
     tracker.record('session_started', { mode: 'meeting', transcription: stt.provider })
     return { ...stt, killSwitch: registry.isKilled() }
   })
-  handle('listen:stop', () => listen.stop('user'))
+  handle('listen:stop', async () => {
+    // Give answers already streaming a moment to land in the session's Q&A.
+    await waitForAnswers(3000)
+    return listen.stop('user')
+  })
   handle('listen:chunk', (_, bytes: Uint8Array, mime: string, s: number, e: number) =>
     listen.pushChunk(new Uint8Array(bytes), mime, s, e)
   )
@@ -394,6 +516,41 @@ function lockDown(contents: WebContents) {
   contents.on('will-navigate', (e) => e.preventDefault())
 }
 
+function registerHotkey(setting: string, fallback: string, action: () => void): void {
+  const accelerator = readSetting<string>(setting, fallback)
+  if (!accelerator) return
+  try {
+    // Registration fails quietly when another app already owns the shortcut.
+    if (!globalShortcut.register(accelerator, action)) {
+      tracker.record('hotkey_unavailable', { setting, accelerator })
+    }
+  } catch {
+    tracker.record('hotkey_unavailable', { setting, accelerator })
+  }
+}
+
+// App-wide shortcuts. The overlay's own show/hide shortcut lives in overlay.ts.
+function registerAppHotkeys(): void {
+  const focusMain = () => {
+    if (!mainWin || mainWin.isDestroyed()) return
+    if (mainWin.isMinimized()) mainWin.restore()
+    mainWin.show()
+    mainWin.focus()
+  }
+  registerHotkey('hotkey.listen', 'Control+Shift+L', () => {
+    focusMain()
+    sendMain('hotkey', 'toggleListen')
+  })
+  registerHotkey('hotkey.ask', 'Control+Shift+A', () => {
+    focusMain()
+    sendMain('hotkey', 'focusAsk')
+  })
+  registerHotkey('hotkey.vision', 'Control+Shift+V', () => {
+    focusMain()
+    sendMain('hotkey', 'vision')
+  })
+}
+
 app.whenReady().then(() => {
   installLoopbackHandler()
   registerIpc()
@@ -415,6 +572,7 @@ app.whenReady().then(() => {
     load: (win) => loadPage(win, 'overlay')
   })
   lockDown(overlay.window.webContents)
+  registerAppHotkeys()
 
   // Closing the main window quits the app; the overlay alone has no taskbar entry or close button.
   mainWin.on('closed', () => {
@@ -425,17 +583,30 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => app.quit())
 
-// Save a running session before quitting. listen.stop waits for in-flight chunks
-// (each bounded by the transcription timeout).
+// Save a running session before quitting, and give a summary already in flight a
+// short chance to land. The transcript is saved first, so a timeout loses only
+// the generated summary, never the session.
 let savingBeforeQuit = false
 app.on('before-quit', (e) => {
-  if (!listen.isActive() || savingBeforeQuit) return
+  if (savingBeforeQuit) return
+  if (!listen.isActive() && pendingSummaries.size === 0) return
   e.preventDefault()
   savingBeforeQuit = true
-  void listen.stop('user').finally(() => app.quit())
+  void (async () => {
+    if (listen.isActive()) await listen.stop('user').catch(() => undefined)
+    if (pendingSummaries.size) {
+      await Promise.race([
+        Promise.allSettled([...pendingSummaries]),
+        new Promise<void>((resolve) => setTimeout(resolve, 10_000))
+      ])
+    }
+    shuttingDown = true
+    app.quit()
+  })()
 })
 
 app.on('will-quit', () => {
+  shuttingDown = true
   globalShortcut.unregisterAll()
   db.close()
 })

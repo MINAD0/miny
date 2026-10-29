@@ -65,6 +65,22 @@ const MIGRATIONS: string[] = [
     INSERT INTO notes_fts(notes_fts, rowid, title, body_md) VALUES ('delete', old.id, old.title, old.body_md);
     INSERT INTO notes_fts(rowid, title, body_md) VALUES (new.id, new.title, new.body_md);
   END;
+  `,
+  `
+  -- Session records keep the raw transcript and the answers separately from the
+  -- generated summary, so a failed summary never destroys what was heard.
+  ALTER TABLE notes ADD COLUMN transcript TEXT NOT NULL DEFAULT '';
+  ALTER TABLE notes ADD COLUMN qa_json TEXT NOT NULL DEFAULT '[]';
+
+  CREATE TABLE context_docs (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('resume', 'document')),
+    name TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX context_docs_one_resume ON context_docs(kind) WHERE kind = 'resume';
   `
 ]
 

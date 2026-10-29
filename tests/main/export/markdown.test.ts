@@ -9,6 +9,8 @@ const note = {
   favorite: false,
   archived: false,
   session_id: null,
+  transcript: '',
+  qa: [],
   created_at: 0,
   updated_at: 0
 }
@@ -24,6 +26,21 @@ describe('noteToMarkdown', () => {
   it('escapes quotes in the title', () => {
     const md = noteToMarkdown({ ...note, title: 'say "hi"' }, [])
     expect(md).toContain('title: "say \\"hi\\""')
+  })
+
+  it('appends the transcript and Q&A to a session note', () => {
+    const md = noteToMarkdown(
+      {
+        ...note,
+        transcript: 'What is a closure?',
+        qa: [{ question: 'What is a closure?', answer: 'A function with its lexical scope.' }]
+      },
+      []
+    )
+    expect(md).toContain('## Transcript')
+    expect(md).toContain('What is a closure?')
+    expect(md).toContain('## Questions and answers')
+    expect(md).toContain('**A:** A function with its lexical scope.')
   })
 })
 

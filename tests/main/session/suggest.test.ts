@@ -35,4 +35,33 @@ describe('suggester', () => {
     const s = createSuggester({ chat })
     expect(await s.ask('define idempotent', null, () => {})).toBe('answer')
   })
+
+  it('adds the resume and context documents to the prompt', async () => {
+    const chat = { stream: vi.fn(() => tokens('ok')) }
+    const s = createSuggester({
+      chat,
+      context: () => ({
+        resume: 'Ten years of backend work',
+        documents: [{ name: 'Role', text: 'TypeScript and Postgres' }]
+      })
+    })
+    await s.suggest('Tell me about yourself', [], () => {})
+    const userText = JSON.stringify((chat.stream.mock.calls[0] as any)[0].messages)
+    expect(userText).toContain('Ten years of backend work')
+    expect(userText).toContain('TypeScript and Postgres')
+    expect(userText).toContain('Role')
+  })
+
+  it('applies length, vocabulary, and translation settings', async () => {
+    const chat = { stream: vi.fn(() => tokens('ok')) }
+    const s = createSuggester({
+      chat,
+      style: () => ({ length: 'short', vocabulary: 'simple', translateTo: 'fr' })
+    })
+    await s.ask('q', null, () => {})
+    const system = (chat.stream.mock.calls[0] as any)[0].messages[0].content as string
+    expect(system).toContain('1 to 2 sentences')
+    expect(system).toContain('CEFR A2')
+    expect(system).toContain('Translation mode is enabled with target language: French')
+  })
 })

@@ -3,6 +3,13 @@ import { PROVIDERS, findProvider } from '../../shared/providers'
 import { cleanIpcError } from './ipcError'
 import { LANGUAGES, LOCAL_MODELS } from '../../shared/transcription'
 import { pickFallbacks } from '../../shared/fallbacks'
+import {
+  LENGTH_OPTIONS,
+  TRANSLATION_TARGETS,
+  VOCABULARY_OPTIONS,
+  toAnswerStyle,
+  type AnswerStyle
+} from '../../shared/answerStyle'
 
 type ModelInfo = { id: string; name: string; free: boolean; vision: boolean; contextTokens: number }
 
@@ -119,6 +126,188 @@ function OpenAiTranscriptionKey(props: {
     </div>
   )
 }
+// smog keeps these as account/server settings; miny stores them locally.
+function AnswerStyleSettings() {
+  const [style, setStyle] = useState<AnswerStyle | null>(null)
+  const [status, setStatus] = useState('')
+
+  useEffect(() => {
+    void window.miny.settings.get('answer.style').then((v: any) => setStyle(toAnswerStyle(v)))
+  }, [])
+
+  if (!style) return null
+
+  const update = async (patch: Partial<AnswerStyle>) => {
+    const next = { ...style, ...patch }
+    setStyle(next)
+    try {
+      await window.miny.settings.set('answer.style', next)
+      setStatus('Answer style saved.')
+    } catch (e) {
+      setStatus(cleanIpcError(e))
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <h2>Answer style</h2>
+      <label style={{ display: 'block' }}>
+        Length{' '}
+        <select
+          aria-label="Answer length"
+          value={style.length}
+          onChange={(e) => void update({ length: e.target.value as AnswerStyle['length'] })}
+        >
+          {LENGTH_OPTIONS.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: 'block', marginTop: 6 }}>
+        Vocabulary{' '}
+        <select
+          aria-label="Answer vocabulary"
+          value={style.vocabulary}
+          onChange={(e) => void update({ vocabulary: e.target.value as AnswerStyle['vocabulary'] })}
+        >
+          {VOCABULARY_OPTIONS.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: 'block', marginTop: 6 }}>
+        Translation{' '}
+        <select
+          aria-label="Translation"
+          value={style.translateTo}
+          onChange={(e) => void update({ translateTo: e.target.value })}
+        >
+          {TRANSLATION_TARGETS.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p role="status">{status}</p>
+    </div>
+  )
+}
+
+type ContextDoc = { id: number; kind: 'resume' | 'document'; name: string; text: string; updated_at: number }
+
+// The resume is the answer source for "tell me about yourself". Context
+// documents are extra facts (job description, project notes) sent with every
+// question. Both are capped by the main process before reaching a model.
+function ContextSettings() {
+  const [docs, setDocs] = useState<ContextDoc[]>([])
+  const [resumeName, setResumeName] = useState('resume')
+  const [resumeText, setResumeText] = useState('')
+  const [docName, setDocName] = useState('')
+  const [docText, setDocText] = useState('')
+  const [status, setStatus] = useState('')
+
+  const load = async () => {
+    const list = (await window.miny.context.list()) as ContextDoc[]
+    setDocs(list)
+    const resume = list.find((d) => d.kind === 'resume')
+    if (resume) {
+      setResumeName(resume.name)
+      setResumeText(resume.text)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+  }, [])
+
+  const saveResume = async () => {
+    try {
+      await window.miny.context.saveResume(resumeName, resumeText)
+      await load()
+      setStatus('Resume saved. Answers about your experience will use it.')
+    } catch (e) {
+      setStatus(cleanIpcError(e))
+    }
+  }
+
+  const addDoc = async () => {
+    try {
+      await window.miny.context.add(docName, docText)
+      setDocName('')
+      setDocText('')
+      await load()
+      setStatus('Context document added.')
+    } catch (e) {
+      setStatus(cleanIpcError(e))
+    }
+  }
+
+  const removeDoc = async (id: number) => {
+    await window.miny.context.remove(id)
+    await load()
+    setStatus('Context document removed.')
+  }
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <h2>Your background</h2>
+      <p style={{ fontSize: 13, opacity: 0.75 }}>
+        Paste your resume or a short background. It is sent only to the provider you chose, and only when answering.
+      </p>
+      <input
+        aria-label="Resume name"
+        value={resumeName}
+        onChange={(e) => setResumeName(e.target.value)}
+        placeholder="resume.txt"
+        style={{ width: '100%' }}
+      />
+      <textarea
+        aria-label="Resume text"
+        value={resumeText}
+        onChange={(e) => setResumeText(e.target.value)}
+        placeholder="Experience, skills, projects, education…"
+        style={{ width: '100%', height: 140, marginTop: 6 }}
+      />
+      <button onClick={saveResume}>Save resume</button>
+
+      <h2 style={{ marginTop: 24 }}>Context documents</h2>
+      {docs.filter((d) => d.kind === 'document').length === 0 && (
+        <p style={{ fontSize: 13, opacity: 0.75 }}>No documents yet. Add the job description or project notes.</p>
+      )}
+      <ul>
+        {docs
+          .filter((d) => d.kind === 'document')
+          .map((d) => (
+            <li key={d.id}>
+              {d.name} <button onClick={() => void removeDoc(d.id)}>Remove</button>
+            </li>
+          ))}
+      </ul>
+      <input
+        aria-label="Context document name"
+        value={docName}
+        onChange={(e) => setDocName(e.target.value)}
+        placeholder="Document name (e.g. job description)"
+        style={{ width: '100%' }}
+      />
+      <textarea
+        aria-label="Context document text"
+        value={docText}
+        onChange={(e) => setDocText(e.target.value)}
+        placeholder="Paste the document text…"
+        style={{ width: '100%', height: 100, marginTop: 6 }}
+      />
+      <button onClick={addDoc}>Add document</button>
+      <p role="status">{status}</p>
+    </div>
+  )
+}
+
 type Active = { providerId: string; model: string }
 
 export function SettingsView() {
@@ -302,6 +491,8 @@ export function SettingsView() {
       )}
 
       <TranscriptionSettings />
+      <AnswerStyleSettings />
+      <ContextSettings />
 
 
       <h2 style={{ marginTop: 24 }}>Network kill switch</h2>

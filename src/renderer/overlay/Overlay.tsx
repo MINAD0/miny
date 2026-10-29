@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 
 type Item = { id: string; question: string; answer: string; error?: string; partial?: boolean }
 
@@ -25,25 +25,41 @@ export function Overlay() {
         background: 'rgba(20,20,20,0.82)',
         color: '#fff',
         borderRadius: 12,
-        padding: 12,
         fontFamily: 'system-ui',
         fontSize: 14,
         height: '100vh',
         boxSizing: 'border-box',
-        overflow: 'auto'
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden'
       }}
     >
-      {items.length === 0 && <div style={{ opacity: 0.6 }}>Listening. Questions and answers appear here.</div>}
-      {items.map((it) => (
-        <div key={it.id} style={{ marginBottom: 12 }}>
-          <div style={{ opacity: 0.7, fontSize: 12 }}>{it.question}</div>
-          {it.error ? (
-            <div style={{ color: '#ffb4b4' }}>{it.error}</div>
-          ) : (
-            <div style={{ whiteSpace: 'pre-wrap' }}>{it.answer || '…'}</div>
-          )}
-        </div>
-      ))}
+      <div
+        style={{
+          WebkitAppRegion: 'drag',
+          padding: '6px 12px',
+          fontSize: 11,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          opacity: 0.55,
+          borderBottom: '1px solid rgba(255,255,255,0.08)'
+        } as CSSProperties}
+      >
+        miny overlay
+      </div>
+      <div style={{ padding: 12, overflow: 'auto', flex: 1 }}>
+        {items.length === 0 && <div style={{ opacity: 0.6 }}>Listening. Questions and answers appear here.</div>}
+        {items.map((it) => (
+          <div key={it.id} style={{ marginBottom: 12 }}>
+            <div style={{ opacity: 0.7, fontSize: 12 }}>{it.question}</div>
+            {it.error ? (
+              <div style={{ color: '#ffb4b4' }}>{it.error}</div>
+            ) : (
+              <div style={{ whiteSpace: 'pre-wrap' }}>{it.answer || '…'}</div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
